@@ -7,15 +7,15 @@ struct TokmonApp: App {
     private let engine: RefreshEngine
 
     init() {
-        // Single-instance guard: opening the installed app while another
-        // copy runs would put a second widget in the menu bar. Only active
+        // Single-instance guard: the NEW instance wins and terminates any
+        // survivors, then keeps launching. Exiting the new instance instead
+        // races the install script's pkill — the old process can still be
+        // mid-death when we check, and then both end up dead. Only active
         // for bundled builds — bare `swift run` binaries have no bundle ID.
         if let bundleID = Bundle.main.bundleIdentifier {
-            let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
                 .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-            if !others.isEmpty {
-                exit(0)
-            }
+                .forEach { $0.terminate() }
         }
 
         Storage.ensureDirectoryExists()

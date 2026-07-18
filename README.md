@@ -18,10 +18,12 @@ the menu shows full per-provider gauges with reset countdowns.
   limits, plus extra-usage credits. Reads Claude Code's OAuth credentials
   from the Keychain (read-only; tokmon never refreshes or writes tokens)
   and polls the same usage endpoint `/usage` reads, every 5 minutes.
-- **Codex** — session/weekly rate limits parsed from the rate-limit
-  snapshots Codex CLI persists in `~/.codex/sessions` transcripts. Data is
-  as fresh as your last Codex turn; the UI shows its actual age. See
-  `docs/guides/codex-data-sources.md`.
+- **Codex** — session/weekly rate limits, live from the same ChatGPT
+  usage endpoint Codex's `/status` uses (read-only reuse of the CLI's
+  OAuth token), polled every 5 minutes. Falls back to the rate-limit
+  snapshots in `~/.codex/sessions` transcripts when the live call fails;
+  fallback data is as fresh as your last Codex turn and the UI shows its
+  actual age. See `docs/guides/codex-data-sources.md`.
 - **Anthropic API** — month-to-date USD spend via the Admin cost report
   API. Needs an Admin API key (organization accounts only) entered in
   Settings; see `docs/action-items/001-create-anthropic-admin-key.md`.

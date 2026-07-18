@@ -1,26 +1,36 @@
 import Foundation
 
-/// Codex/ChatGPT rate limits, read from the rate_limits payloads Codex CLI
-/// persists in its session files (~/.codex/sessions/**/rollout-*.jsonl,
-/// token_count events).
+/// Codex/ChatGPT rate limits.
 ///
-/// Chosen over replaying the ChatGPT OAuth token from auth.json: local
-/// parsing needs no undocumented endpoint and no token handling. The
-/// tradeoff is freshness — data is as of the last Codex turn — which the
-/// UI reports honestly because fetchedAt is the event's own timestamp.
+/// Live-first: reads the ChatGPT OAuth token Codex CLI stores in
+/// ~/.codex/auth.json (read-only — tokmon never refreshes or writes it)
+/// and queries the same usage endpoint Codex's own /status uses
+/// (endpoint + headers verified against the open codex-rs source,
+/// backend-client/src/client/rate_limit_resets.rs).
+///
+/// Falls back to the rate_limits snapshots Codex CLI persists in its
+/// session files (~/.codex/sessions/**/rollout-*.jsonl) when the live
+/// call fails (expired token, offline, endpoint change). File data is
+/// as of the last Codex turn; its snapshot keeps the event's own
+/// timestamp so the staleness label stays honest.
 struct CodexProvider: UsageProvider {
     let id = "codex"
     let descriptor = ProviderDescriptor(displayName: "Codex", systemImage: "chevron.left.forwardslash.chevron.right", menuBarGlyph: "X")
     let refreshInterval: TimeInterval = 300
 
-    private static var sessionsDirectory: URL {
+    private static let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
+
+    private static var codexDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/sessions", isDirectory: true)
+            .appendingPathComponent(".codex", isDirectory: true)
     }
 
     func fetchSnapshot() async throws -> ProviderSnapshot {
+        if let live = try? await fetchLive() {
+            return live
+        }
         guard let event = Self.latestRateLimitEvent() else {
-            throw ProviderError.authRequired(hint: "Run Codex once to record usage")
+            throw ProviderError.authRequired(hint: "Sign in to Codex (codex login)")
         }
         return ProviderSnapshot(
             providerID: id,
@@ -30,7 +40,70 @@ struct CodexProvider: UsageProvider {
         )
     }
 
-    // MARK: - Session file scanning
+    // MARK: - Live endpoint
+
+    private struct CodexAuth: Decodable {
+        struct Tokens: Decodable {
+            let accessToken: String?
+            let accountId: String?
+        }
+        let tokens: Tokens?
+    }
+
+    struct WhamUsage: Decodable {
+        struct Window: Decodable {
+            let usedPercent: Double?
+            let limitWindowSeconds: Double?
+            let resetAt: Double?  // unix seconds
+        }
+        struct RateLimit: Decodable {
+            let primaryWindow: Window?
+            let secondaryWindow: Window?
+        }
+        let rateLimit: RateLimit?
+    }
+
+    private func fetchLive() async throws -> ProviderSnapshot {
+        let authURL = Self.codexDirectory.appendingPathComponent("auth.json")
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let auth = try decoder.decode(CodexAuth.self, from: Data(contentsOf: authURL))
+        guard let token = auth.tokens?.accessToken, let account = auth.tokens?.accountId else {
+            throw ProviderError.authRequired(hint: "Sign in to Codex (codex login)")
+        }
+
+        var request = URLRequest(url: Self.usageURL)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(account, forHTTPHeaderField: "ChatGPT-Account-Id")
+        request.setValue("tokmon/0.1.0 (github.com/obrien-matthew/tokmon)", forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+
+        let usage = try decoder.decode(WhamUsage.self, from: data)
+        var metrics: [UsageMetric] = []
+        let windows = [
+            ("primary", usage.rateLimit?.primaryWindow),
+            ("secondary", usage.rateLimit?.secondaryWindow),
+        ]
+        for (metricID, window) in windows {
+            guard let window, let usedPercent = window.usedPercent else { continue }
+            metrics.append(Self.windowMetric(
+                id: metricID,
+                usedPercent: usedPercent,
+                durationSeconds: window.limitWindowSeconds,
+                resetsAt: window.resetAt.map { Date(timeIntervalSince1970: $0) }
+            ))
+        }
+        guard !metrics.isEmpty else {
+            throw URLError(.cannotParseResponse)
+        }
+        return ProviderSnapshot(providerID: id, fetchedAt: Date(), status: .ok, metrics: metrics)
+    }
+
+    // MARK: - Session file fallback
 
     struct RateLimitEvent {
         let timestamp: Date
@@ -61,6 +134,7 @@ struct CodexProvider: UsageProvider {
     /// reporting or contain no turns, so fall through a few before giving up.
     static func latestRateLimitEvent() -> RateLimitEvent? {
         let fm = FileManager.default
+        let sessionsDirectory = codexDirectory.appendingPathComponent("sessions", isDirectory: true)
         guard let enumerator = fm.enumerator(
             at: sessionsDirectory,
             includingPropertiesForKeys: [.contentModificationDateKey]
@@ -107,34 +181,41 @@ struct CodexProvider: UsageProvider {
         return nil
     }
 
-    // MARK: - Mapping
-
     static func metrics(from limits: RateLimits) -> [UsageMetric] {
         var metrics: [UsageMetric] = []
-        for (id, window) in [("primary", limits.primary), ("secondary", limits.secondary)] {
+        for (metricID, window) in [("primary", limits.primary), ("secondary", limits.secondary)] {
             guard let window, let usedPercent = window.usedPercent else { continue }
-            let duration = window.windowMinutes.map { $0 * 60 }
-            metrics.append(UsageMetric(
-                id: id,
-                label: label(forWindowMinutes: window.windowMinutes),
-                kind: .rateLimitWindow,
-                used: usedPercent,
-                limit: 100,
-                unit: .percent,
-                window: MetricWindow(
-                    duration: duration,
-                    resetsAt: window.resetsAt.map { Date(timeIntervalSince1970: $0) }
-                )
+            metrics.append(windowMetric(
+                id: metricID,
+                usedPercent: usedPercent,
+                durationSeconds: window.windowMinutes.map { $0 * 60 },
+                resetsAt: window.resetsAt.map { Date(timeIntervalSince1970: $0) }
             ))
         }
         return metrics
     }
 
-    private static func label(forWindowMinutes minutes: Double?) -> String {
-        switch minutes {
-        case .some(300): "Session"
-        case .some(10080): "Weekly"
-        case .some(let m): "\(Int(m / 60))h window"
+    // MARK: - Shared mapping
+
+    static func windowMetric(
+        id: String, usedPercent: Double, durationSeconds: Double?, resetsAt: Date?
+    ) -> UsageMetric {
+        UsageMetric(
+            id: id,
+            label: label(forWindowSeconds: durationSeconds),
+            kind: .rateLimitWindow,
+            used: usedPercent,
+            limit: 100,
+            unit: .percent,
+            window: MetricWindow(duration: durationSeconds, resetsAt: resetsAt)
+        )
+    }
+
+    private static func label(forWindowSeconds seconds: Double?) -> String {
+        switch seconds {
+        case .some(18_000): "Session"
+        case .some(604_800): "Weekly"
+        case .some(let s): "\(Int(s / 3600))h window"
         case nil: "Usage"
         }
     }

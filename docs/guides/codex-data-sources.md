@@ -1,9 +1,30 @@
 # Codex data sources
 
-Findings from the Phase 4 investigation (2026-07-18), for future maintenance
-of the Codex provider.
+Findings from the Phase 4 investigation and the live-endpoint follow-up
+(both 2026-07-18), for future maintenance of the Codex provider.
 
-## What tokmon uses: session file parsing
+## What tokmon uses first: the live usage endpoint
+
+`GET https://chatgpt.com/backend-api/wham/usage` with headers:
+
+- `Authorization: Bearer <tokens.access_token from ~/.codex/auth.json>`
+- `ChatGPT-Account-Id: <tokens.account_id>`
+- any User-Agent (verified: a tokmon UA is accepted; no spoofing needed)
+
+Endpoint and headers were confirmed against the open Codex CLI source
+(`codex-rs/backend-client/src/client/rate_limit_resets.rs`): path is
+`{base}/wham/usage` for chatgpt.com's `/backend-api` base (the
+`/api/codex/usage` form is for the other path style). Response carries
+`rate_limit.primary_window` / `secondary_window` with `used_percent`,
+`limit_window_seconds` (604800 = weekly, 18000 = 5h), `reset_at` (unix
+seconds), plus plan/credits fields tokmon ignores.
+
+Token posture matches the Claude provider: read-only use of the CLI's
+stored token, never refreshed or written (access tokens observed lasting
+several days; Codex CLI refreshes them on use). Any live failure falls
+back to session file parsing below.
+
+## Fallback: session file parsing
 
 Codex CLI persists rate-limit snapshots in its session transcripts:
 
@@ -21,13 +42,12 @@ Freshness caveat: this is data *as of the last Codex turn*. The provider
 sets the snapshot's `fetchedAt` to the event timestamp so the UI's
 staleness label stays truthful.
 
-## What was considered and rejected
+## History
 
-- **Replaying the ChatGPT OAuth token** from `~/.codex/auth.json`
-  (`tokens.access_token`, `auth_mode: "chatgpt"`) against whatever backend
-  endpoint Codex's `/status` uses. Rejected for v1: undocumented endpoint,
-  token handling risk, and the local files already contain the same
-  percentages. Revisit if freshness between Codex sessions matters.
+The v1 provider was file-only (token replay initially rejected as
+undocumented-endpoint risk). Went live-first once the endpoint contract
+was verified against the Codex source — stale file data understated
+nothing but could overstate usage by a full day of decay.
 
 ## Fragility notes
 
