@@ -5,6 +5,8 @@ struct AppSettings: Codable, Sendable, Equatable {
     /// to the provider's own default, so new providers appear (and mock
     /// providers stay hidden) without a settings migration.
     var providerOverrides: [String: Bool] = [:]
+    /// nil = auto (most-constrained metric across all providers).
+    var headlineProviderID: String?
 
     func isEnabled(_ providerID: String, default defaultValue: Bool) -> Bool {
         providerOverrides[providerID] ?? defaultValue

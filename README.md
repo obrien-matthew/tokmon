@@ -10,11 +10,26 @@ macOS may render menu bar labels as monochrome templates — a `!` prefix is
 the reliable marker that the shown value is cached from a degraded provider).
 Opening the menu shows per-provider gauges with reset countdowns.
 
-## Status
+## Providers
 
-Phase 1 complete: core engine, universal UI, mock providers. Real providers
-(Claude subscription, Anthropic API spend, Codex) are next — see
-`docs/plans/active/`.
+- **Claude subscription** — session (5h), weekly, and model-scoped weekly
+  limits, plus extra-usage credits. Reads Claude Code's OAuth credentials
+  from the Keychain (read-only; tokmon never refreshes or writes tokens)
+  and polls the same usage endpoint `/usage` reads, every 5 minutes.
+- **Codex** — session/weekly rate limits parsed from the rate-limit
+  snapshots Codex CLI persists in `~/.codex/sessions` transcripts. Data is
+  as fresh as your last Codex turn; the UI shows its actual age. See
+  `docs/guides/codex-data-sources.md`.
+- **Anthropic API** — month-to-date USD spend via the Admin cost report
+  API. Needs an Admin API key (organization accounts only) entered in
+  Settings; see `docs/action-items/001-create-anthropic-admin-key.md`.
+- **Mocks** — two dev providers (disabled by default, toggleable in
+  Settings) exercising every metric kind and the degraded/stale paths.
+
+Settings also cover per-provider enable/disable, a menu bar title override
+(pin one provider instead of auto most-constrained), and launch at login
+(a launchd agent plist, since a bare SwiftPM executable can't use
+SMAppService).
 
 ## Build and run
 
@@ -58,10 +73,19 @@ means an open-ended counter (rendered without a bar, never the headline);
 countdowns are computed client-side from `resetsAt` so they stay correct
 while data is stale.
 
-## Roadmap
+## Adding a provider
 
-- Claude subscription provider (Claude Code OAuth credentials from Keychain,
-  read via the `security` CLI; authoritative session/weekly percentages)
-- Anthropic API spend provider (Admin API cost report)
-- Codex/ChatGPT provider (exploratory)
-- Settings polish, launch at login (launchd agent)
+Write one type conforming to `UsageProvider` (identity, refresh interval,
+`fetchSnapshot()` mapping your data source into `UsageMetric`s), add it to
+`ProviderRegistry.allProviders()`. The UI, refresh scheduling, caching, and
+degraded-state handling come for free. Model conventions to respect: percent
+metrics use `limit: 100`; `limit: nil` means an open-ended counter; throw
+`ProviderError.authRequired(hint:)` for credential problems so cached gauges
+stay visible with a hint.
+
+## Future ideas
+
+- OpenAI API spend provider
+- Notifications on threshold crossing
+- Historical charts / per-project cost breakdowns (Claude Code JSONL)
+- App bundle + signing for distribution

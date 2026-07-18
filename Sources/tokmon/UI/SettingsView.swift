@@ -3,6 +3,8 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var store: SettingsStore
     @State private var adminKeyInput = ""
+    @State private var launchAtLogin = LaunchAgent.isInstalled
+    @State private var launchAtLoginError: String?
     @State private var adminKeyStatus = SecurityCLI.hasGenericPassword(
         service: AnthropicAPIProvider.keychainService,
         account: AnthropicAPIProvider.keychainAccount
@@ -27,7 +29,26 @@ struct SettingsView: View {
                     Toggle(row.displayName, isOn: binding(for: row))
                 }
             }
-            Text("Provider changes take effect after relaunch.")
+            Section("Menu bar") {
+                Picker("Title shows", selection: headlineBinding) {
+                    Text("Most constrained (auto)").tag(String?.none)
+                    ForEach(rows) { row in
+                        Text(row.displayName).tag(String?.some(row.id))
+                    }
+                }
+            }
+            Section("General") {
+                Toggle("Launch at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, enabled in
+                        toggleLaunchAtLogin(enabled)
+                    }
+                if let launchAtLoginError {
+                    Text(launchAtLoginError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+            Text("Provider and menu bar changes take effect after relaunch.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Section("Anthropic API") {
@@ -47,6 +68,27 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 340)
         .fixedSize()
+    }
+
+    private var headlineBinding: Binding<String?> {
+        Binding(
+            get: { store.settings.headlineProviderID },
+            set: { store.settings.headlineProviderID = $0 }
+        )
+    }
+
+    private func toggleLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try LaunchAgent.install()
+            } else {
+                LaunchAgent.uninstall()
+            }
+            launchAtLoginError = nil
+        } catch {
+            launchAtLoginError = "Failed: \(error.localizedDescription)"
+            launchAtLogin = LaunchAgent.isInstalled
+        }
     }
 
     private func saveAdminKey() {

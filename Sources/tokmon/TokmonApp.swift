@@ -15,7 +15,11 @@ struct TokmonApp: App {
         let enabledIDs = Set(providers.map(\.id))
         let cached = cache.load().filter { enabledIDs.contains($0.key) }
 
-        let state = AppState(providers: providers, cached: cached)
+        let state = AppState(
+            providers: providers,
+            cached: cached,
+            headlineProviderID: settingsStore.settings.headlineProviderID
+        )
         let engine = RefreshEngine(providers: providers, cache: cache, initial: cached) { snapshot in
             await state.apply(snapshot)
         }

@@ -18,6 +18,12 @@ struct MenuContentView: View {
                     // Accessory apps don't come forward on their own.
                     NSApplication.shared.activate(ignoringOtherApps: true)
                 })
+                Button {
+                    Task { await engine.refreshAll(force: true) }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .help("Refresh all providers now")
                 Spacer()
                 Button("Quit") {
                     NSApplication.shared.terminate(nil)

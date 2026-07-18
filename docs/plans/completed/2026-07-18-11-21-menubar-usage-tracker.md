@@ -1,6 +1,8 @@
 # tokmon — macOS Menu Bar AI Usage Tracker
 
-**Status:** Approved; Phase 1 complete, Phase 2 next
+**Status:** Completed 2026-07-18. Phase 3 live verification pending the
+user's Admin API key (action item 001); login-relaunch check pending next
+reboot. Everything else verified against live data.
 **Created:** 2026-07-18 11:21
 
 ## Goal
@@ -231,16 +233,19 @@ land after Phase 5 if blocked.
 Codex CLI `/status`, or the documented-findings fallback.
 
 ### Phase 5 — Polish
-- [ ] Settings: enable/disable providers, per-provider config, menu bar
-  title metric override.
-- [ ] Launch at login: install/remove a launchd agent plist in
+- [x] Settings: enable/disable providers, admin key entry, menu bar title
+  override (auto most-constrained, or pinned to one provider).
+- [x] Launch at login: toggle installs/removes a launchd agent plist at
   `~/Library/LaunchAgents/com.matthew.tokmon.plist` pointing at the built
-  binary (SMAppService needs an app bundle we don't have).
-- [ ] Manual refresh button + "last updated" per provider.
-- [ ] Final README pass; move this plan to `docs/plans/completed/`.
+  binary, with best-effort `launchctl bootstrap`/`bootout`.
+- [x] Manual refresh button; per-provider "as of" staleness label was
+  already in Phase 1.
+- [x] Final README pass; plan moved to `docs/plans/completed/`.
 
-**Exit criteria:** app relaunches at login and repopulates from cache before
-the first fetch completes.
+**Exit criteria:** cache-first repopulation verified (AppState seeds from
+snapshots.json at init, before any fetch). Actual login relaunch left for
+the user's next reboot — the toggle writes the plist; verify with
+`launchctl print gui/$UID/com.matthew.tokmon` after enabling.
 
 ## Out of scope (v1)
 

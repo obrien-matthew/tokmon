@@ -17,10 +17,17 @@ struct Headline: Equatable {
 @MainActor
 final class AppState: ObservableObject {
     let providers: [ProviderInfo]
+    /// nil = auto; otherwise restricts the menu bar title to one provider.
+    let headlineProviderID: String?
     @Published private(set) var snapshots: [String: ProviderSnapshot]
 
-    init(providers: [any UsageProvider], cached: [String: ProviderSnapshot]) {
+    init(
+        providers: [any UsageProvider],
+        cached: [String: ProviderSnapshot],
+        headlineProviderID: String? = nil
+    ) {
         self.providers = providers.map { ProviderInfo(id: $0.id, descriptor: $0.descriptor) }
+        self.headlineProviderID = headlineProviderID
         self.snapshots = cached
     }
 
@@ -33,6 +40,7 @@ final class AppState: ObservableObject {
     var headline: Headline? {
         var best: Headline?
         for info in providers {
+            if let headlineProviderID, info.id != headlineProviderID { continue }
             guard let snapshot = snapshots[info.id] else { continue }
             for metric in snapshot.metrics where metric.kind == .rateLimitWindow {
                 guard let fraction = metric.fraction else { continue }
