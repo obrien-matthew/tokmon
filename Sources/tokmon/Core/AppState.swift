@@ -5,12 +5,16 @@ struct ProviderInfo: Identifiable, Equatable {
     let descriptor: ProviderDescriptor
 }
 
-struct Headline: Equatable {
-    var metric: UsageMetric
-    var degraded: Bool
+/// One provider's line in the menu bar title: its most-constrained
+/// rate-limit window reduced to a fill fraction.
+struct MenuBarRow: Identifiable, Equatable {
+    let id: String
+    let glyph: String
+    let fraction: Double
+    let degraded: Bool
 
     var percent: Int {
-        Int(((metric.fraction ?? 0) * 100).rounded())
+        Int((fraction * 100).rounded())
     }
 }
 
@@ -35,20 +39,26 @@ final class AppState: ObservableObject {
         snapshots[snapshot.providerID] = snapshot
     }
 
-    /// The single most-constrained rate-limit metric across all providers —
-    /// what the menu bar title shows. Open-ended counters never qualify.
-    var headline: Headline? {
-        var best: Headline?
+    /// One row per provider that has rate-limit data, in registry order so
+    /// positions stay stable at a glance. Open-ended counters never qualify.
+    /// Capped at two rows — that's what fits in the menu bar's 22pt height.
+    var menuBarRows: [MenuBarRow] {
+        var rows: [MenuBarRow] = []
         for info in providers {
             if let headlineProviderID, info.id != headlineProviderID { continue }
             guard let snapshot = snapshots[info.id] else { continue }
-            for metric in snapshot.metrics where metric.kind == .rateLimitWindow {
-                guard let fraction = metric.fraction else { continue }
-                if best == nil || fraction > (best!.metric.fraction ?? 0) {
-                    best = Headline(metric: metric, degraded: !snapshot.status.isOK)
-                }
-            }
+            let worst = snapshot.metrics
+                .filter { $0.kind == .rateLimitWindow }
+                .compactMap(\.fraction)
+                .max()
+            guard let worst else { continue }
+            rows.append(MenuBarRow(
+                id: info.id,
+                glyph: info.descriptor.menuBarGlyph,
+                fraction: worst,
+                degraded: !snapshot.status.isOK
+            ))
         }
-        return best
+        return Array(rows.prefix(2))
     }
 }

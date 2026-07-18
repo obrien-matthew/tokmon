@@ -31,7 +31,7 @@ struct SettingsView: View {
             }
             Section("Menu bar") {
                 Picker("Title shows", selection: headlineBinding) {
-                    Text("Most constrained (auto)").tag(String?.none)
+                    Text("All providers (auto)").tag(String?.none)
                     ForEach(rows) { row in
                         Text(row.displayName).tag(String?.some(row.id))
                     }

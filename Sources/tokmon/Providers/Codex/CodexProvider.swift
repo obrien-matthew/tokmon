@@ -10,7 +10,7 @@ import Foundation
 /// UI reports honestly because fetchedAt is the event's own timestamp.
 struct CodexProvider: UsageProvider {
     let id = "codex"
-    let descriptor = ProviderDescriptor(displayName: "Codex", systemImage: "chevron.left.forwardslash.chevron.right")
+    let descriptor = ProviderDescriptor(displayName: "Codex", systemImage: "chevron.left.forwardslash.chevron.right", menuBarGlyph: "X")
     let refreshInterval: TimeInterval = 300
 
     private static var sessionsDirectory: URL {

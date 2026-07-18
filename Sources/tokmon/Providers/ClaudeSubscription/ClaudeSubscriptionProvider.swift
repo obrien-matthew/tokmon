@@ -9,7 +9,7 @@ import Foundation
 /// sessions, not an error.
 struct ClaudeSubscriptionProvider: UsageProvider {
     let id = "claude-subscription"
-    let descriptor = ProviderDescriptor(displayName: "Claude", systemImage: "asterisk.circle")
+    let descriptor = ProviderDescriptor(displayName: "Claude", systemImage: "asterisk.circle", menuBarGlyph: "C")
     // A 5h window doesn't need finer resolution, and this is an undocumented
     // endpoint being called by a foreign client — keep the cadence polite.
     let refreshInterval: TimeInterval = 300

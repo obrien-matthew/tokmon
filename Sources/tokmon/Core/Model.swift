@@ -63,6 +63,9 @@ struct ProviderSnapshot: Codable, Sendable, Equatable {
 struct ProviderDescriptor: Sendable, Equatable {
     var displayName: String
     var systemImage: String
+    /// Single character identifying the provider in the menu bar rows.
+    /// Both Claude and Codex start with C, so these are hand-picked.
+    var menuBarGlyph: String
 }
 
 enum ProviderError: Error {

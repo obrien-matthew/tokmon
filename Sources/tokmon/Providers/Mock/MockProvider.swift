@@ -4,7 +4,7 @@ import Foundation
 /// Values drift with wall-clock time so refreshes visibly change the UI.
 struct MockProvider: UsageProvider {
     let id = "mock-claude"
-    let descriptor = ProviderDescriptor(displayName: "Mock Claude", systemImage: "sparkle")
+    let descriptor = ProviderDescriptor(displayName: "Mock Claude", systemImage: "sparkle", menuBarGlyph: "M")
     let refreshInterval: TimeInterval = 30
     let enabledByDefault = false
 
@@ -66,7 +66,7 @@ struct MockProvider: UsageProvider {
 /// menu bar title, since its session gauge starts most-constrained.
 final class MockDegradingProvider: UsageProvider, Sendable {
     let id = "mock-degrading"
-    let descriptor = ProviderDescriptor(displayName: "Mock Degrading", systemImage: "terminal")
+    let descriptor = ProviderDescriptor(displayName: "Mock Degrading", systemImage: "terminal", menuBarGlyph: "D")
     let refreshInterval: TimeInterval = 45
     let enabledByDefault = false
 

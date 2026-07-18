@@ -9,7 +9,7 @@ import Foundation
 /// so a 15-minute poll is plenty.
 struct AnthropicAPIProvider: UsageProvider {
     let id = "anthropic-api"
-    let descriptor = ProviderDescriptor(displayName: "Anthropic API", systemImage: "dollarsign.circle")
+    let descriptor = ProviderDescriptor(displayName: "Anthropic API", systemImage: "dollarsign.circle", menuBarGlyph: "$")
     let refreshInterval: TimeInterval = 900
 
     static let keychainService = "tokmon"

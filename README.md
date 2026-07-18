@@ -4,11 +4,13 @@ A macOS menu bar app that tracks AI provider usage limits at a glance:
 Claude subscription session (5h) and weekly limits, Anthropic API spend,
 and Codex/ChatGPT rate limits.
 
-The menu bar title shows the single most-constrained rate-limit percentage
-across all providers, color-escalated (orange at 70%, red at 90%; note that
-macOS may render menu bar labels as monochrome templates — a `!` prefix is
-the reliable marker that the shown value is cached from a degraded provider).
-Opening the menu shows per-provider gauges with reset countdowns.
+The menu bar title stacks one micro-row per provider (up to two): a glyph
+(C = Claude, X = Codex), a tiny gauge bar, and the percent of that
+provider's most-constrained rate-limit window, color-escalated (orange at
+70%, red at 90%). Rows render as a composed image so color and two-line
+layout survive the menu bar's template rendering; a dimmed row means the
+value is cached from a degraded provider (stale or auth needed). Opening
+the menu shows full per-provider gauges with reset countdowns.
 
 ## Providers
 
