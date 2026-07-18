@@ -34,10 +34,24 @@ struct MenuBarLabel: View {
         let renderer = ImageRenderer(
             content: MenuBarRowsView(rows: rows, baseColor: base)
         )
-        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        // Always 2x: NSImage.size stays in points, so this just adds a
+        // Retina representation. NSScreen.main tracks whichever display is
+        // key and can report 1x while the menu bar sits on a Retina screen.
+        renderer.scale = 2
         guard let image = renderer.nsImage else { return nil }
         image.isTemplate = false
+        dumpDebugImage(image)
         return image
+    }
+
+    /// Writes the composed label next to the snapshot cache so rendering
+    /// problems can be diagnosed by looking at the actual produced image.
+    private static func dumpDebugImage(_ image: NSImage) {
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:])
+        else { return }
+        try? png.write(to: Storage.directory.appendingPathComponent("menubar-debug.png"))
     }
 }
 
@@ -49,7 +63,8 @@ struct MenuBarRowsView: View {
     private var compact: Bool { rows.count > 1 }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        // Total height must stay under ~18pt or the status item clips.
+        VStack(alignment: .leading, spacing: 1) {
             ForEach(rows) { row in
                 rowView(row)
                     .opacity(row.degraded ? 0.5 : 1)
@@ -76,6 +91,7 @@ struct MenuBarRowsView: View {
                 .font(.system(size: compact ? 8 : 11, weight: .semibold, design: .monospaced))
                 .frame(width: compact ? 13 : 17, alignment: .trailing)
         }
+        .frame(height: compact ? 8 : 14)
     }
 
     private var barWidth: CGFloat { compact ? 16 : 22 }

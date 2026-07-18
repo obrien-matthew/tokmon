@@ -47,15 +47,19 @@ final class AppState: ObservableObject {
         for info in providers {
             if let headlineProviderID, info.id != headlineProviderID { continue }
             guard let snapshot = snapshots[info.id] else { continue }
-            let worst = snapshot.metrics
-                .filter { $0.kind == .rateLimitWindow }
-                .compactMap(\.fraction)
-                .max()
-            guard let worst else { continue }
+            let rateMetrics = snapshot.metrics.filter { $0.kind == .rateLimitWindow }
+            // Prefer the 5h session window; providers without one (e.g.
+            // Codex reporting only weekly) fall back to most constrained.
+            let session = rateMetrics.first {
+                $0.window?.duration == 18_000 || $0.id == "session"
+            }
+            guard let fraction = session?.fraction
+                    ?? rateMetrics.compactMap(\.fraction).max()
+            else { continue }
             rows.append(MenuBarRow(
                 id: info.id,
                 glyph: info.descriptor.menuBarGlyph,
-                fraction: worst,
+                fraction: fraction,
                 degraded: !snapshot.status.isOK
             ))
         }
