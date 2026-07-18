@@ -5,6 +5,7 @@ enum ProviderRegistry {
     static func allProviders() -> [any UsageProvider] {
         [
             ClaudeSubscriptionProvider(),
+            AnthropicAPIProvider(),
             MockProvider(),
             MockDegradingProvider(),
         ]

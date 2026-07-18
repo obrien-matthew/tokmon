@@ -15,10 +15,28 @@ enum SecurityCLI {
         }
     }
 
-    static func findGenericPassword(service: String) throws -> String {
+    static func findGenericPassword(service: String, account: String? = nil) throws -> String {
+        var arguments = ["find-generic-password", "-s", service]
+        if let account {
+            arguments += ["-a", account]
+        }
+        arguments.append("-w")
+        return try run(arguments)
+    }
+
+    /// -U updates in place if the item already exists.
+    static func addGenericPassword(service: String, account: String, secret: String) throws {
+        _ = try run(["add-generic-password", "-U", "-s", service, "-a", account, "-w", secret])
+    }
+
+    static func hasGenericPassword(service: String, account: String? = nil) -> Bool {
+        (try? findGenericPassword(service: service, account: account)) != nil
+    }
+
+    private static func run(_ arguments: [String]) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["find-generic-password", "-s", service, "-w"]
+        process.arguments = arguments
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout
