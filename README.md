@@ -37,13 +37,25 @@ SMAppService).
 
 Requires macOS 14+ and a Swift 6 toolchain (Xcode or CLT).
 
+Install as an app (recommended — builds a release binary, wraps it in a
+minimal ad-hoc-signed `tokmon.app`, installs to /Applications, launches):
+
+```sh
+./Scripts/install-app.sh
+```
+
+Re-run the script after code changes to update the installed app. For
+quick development iteration without installing:
+
 ```sh
 swift run
 ```
 
 The app runs as a menu bar accessory (no Dock icon). Quit from the menu.
-State lives in `~/Library/Application Support/tokmon/` (snapshot cache and
-settings, both plain JSON).
+A single-instance guard in the bundled app prevents double-launching from
+creating two menu bar widgets. State lives in
+`~/Library/Application Support/tokmon/` (snapshot cache and settings,
+both plain JSON).
 
 ## Architecture
 

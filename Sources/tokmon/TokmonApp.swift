@@ -7,6 +7,17 @@ struct TokmonApp: App {
     private let engine: RefreshEngine
 
     init() {
+        // Single-instance guard: opening the installed app while another
+        // copy runs would put a second widget in the menu bar. Only active
+        // for bundled builds — bare `swift run` binaries have no bundle ID.
+        if let bundleID = Bundle.main.bundleIdentifier {
+            let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+            if !others.isEmpty {
+                exit(0)
+            }
+        }
+
         Storage.ensureDirectoryExists()
 
         let settingsStore = SettingsStore()
