@@ -201,27 +201,28 @@ fallback, out of scope for v1.
 Keychain item (test copy) yields authRequired with cached gauges intact.
 
 ### Phase 3 — Anthropic API spend provider
-- [ ] Settings field for an Admin API key → stored via `security
+- [x] Settings field for an Admin API key → stored via `security
   add-generic-password` under service `tokmon`.
-- [ ] Cost report via Admin API (`/v1/organizations/cost_report`) — verify
-  endpoint/params against current docs at implementation time; MTD spend
-  requires **summing paginated daily buckets**, not a single number.
-- [ ] Metrics: USD month-to-date (counter, no limit), optionally today's
-  tokens. Poll every 15 min (data lags anyway).
-- [ ] Action item doc: `docs/action-items/001-create-anthropic-admin-key.md`.
+- [x] Cost report via Admin API (`/v1/organizations/cost_report`) — contract
+  verified against current docs: amounts are decimal strings in cents,
+  daily buckets only, has_more/next_page pagination, ~5 min data lag.
+  Caveat found: Admin API is unavailable for individual accounts.
+- [x] Metrics: USD month-to-date (counter, no limit). Poll every 15 min.
+- [x] Action item doc: `docs/action-items/001-create-anthropic-admin-key.md`.
 
 **Exit criteria:** MTD USD matches the console cost page within expected
 data lag.
 
 ### Phase 4 — Codex/ChatGPT provider (exploratory)
-- [ ] Investigate data sources in order: (a) `~/.codex/auth.json` ChatGPT
-  OAuth token + whatever usage endpoint Codex CLI's `/status` uses (observe
-  via Codex CLI source or a local proxy); (b) rate-limit fields Codex CLI
-  persists locally. Pick the most stable. Same short-lived-token caveat as
-  Phase 2 applies.
-- [ ] Implement provider mapping session/weekly percentages to metrics.
-- [ ] If no reliable source found, ship provider hidden/disabled and document
-  findings in `docs/guides/codex-data-sources.md`.
+- [x] Investigated: option (b) won — Codex CLI persists `rate_limits`
+  (used_percent, window_minutes, resets_at) in token_count events inside
+  `~/.codex/sessions/**/rollout-*.jsonl`. No token replay needed. Freshness
+  is "as of last Codex turn"; snapshot fetchedAt uses the event timestamp
+  so staleness display stays honest.
+- [x] Implemented provider mapping primary/secondary windows to metrics
+  (300 min → Session, 10080 min → Weekly, generic fallback for others).
+- [x] Findings documented in `docs/guides/codex-data-sources.md`.
+  Verified live: Weekly 31% matching the newest session file.
 
 **Risks:** highest reverse-engineering uncertainty; explicitly allowed to
 land after Phase 5 if blocked.

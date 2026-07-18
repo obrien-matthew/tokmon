@@ -66,7 +66,7 @@ struct MockProvider: UsageProvider {
 /// menu bar title, since its session gauge starts most-constrained.
 final class MockDegradingProvider: UsageProvider, Sendable {
     let id = "mock-degrading"
-    let descriptor = ProviderDescriptor(displayName: "Mock Codex", systemImage: "terminal")
+    let descriptor = ProviderDescriptor(displayName: "Mock Degrading", systemImage: "terminal")
     let refreshInterval: TimeInterval = 45
     let enabledByDefault = false
 
