@@ -73,5 +73,12 @@ protocol UsageProvider: Sendable {
     var id: String { get }
     var descriptor: ProviderDescriptor { get }
     var refreshInterval: TimeInterval { get }
+    /// Whether the provider runs before the user has expressed a preference.
+    /// Dev/mock providers override this to false.
+    var enabledByDefault: Bool { get }
     func fetchSnapshot() async throws -> ProviderSnapshot
+}
+
+extension UsageProvider {
+    var enabledByDefault: Bool { true }
 }

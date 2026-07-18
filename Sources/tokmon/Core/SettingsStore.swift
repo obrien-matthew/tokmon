@@ -1,12 +1,13 @@
 import Foundation
 
 struct AppSettings: Codable, Sendable, Equatable {
-    /// Providers are enabled by default; this records explicit opt-outs so
-    /// newly added providers appear without a settings migration.
-    var disabledProviderIDs: Set<String> = []
+    /// Explicit per-provider overrides only; anything unrecorded falls back
+    /// to the provider's own default, so new providers appear (and mock
+    /// providers stay hidden) without a settings migration.
+    var providerOverrides: [String: Bool] = [:]
 
-    func isEnabled(_ providerID: String) -> Bool {
-        !disabledProviderIDs.contains(providerID)
+    func isEnabled(_ providerID: String, default defaultValue: Bool) -> Bool {
+        providerOverrides[providerID] ?? defaultValue
     }
 }
 
@@ -30,11 +31,7 @@ final class SettingsStore: ObservableObject {
     }
 
     func setEnabled(_ providerID: String, _ enabled: Bool) {
-        if enabled {
-            settings.disabledProviderIDs.remove(providerID)
-        } else {
-            settings.disabledProviderIDs.insert(providerID)
-        }
+        settings.providerOverrides[providerID] = enabled
     }
 
     private func save() {

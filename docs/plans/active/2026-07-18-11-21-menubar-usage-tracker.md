@@ -176,26 +176,21 @@ error/auth modes show stale-with-timestamp and hint text, never blanks;
 title escalates color at thresholds.
 
 ### Phase 2 — Claude subscription provider
-- [ ] Read Claude Code OAuth credentials via `security find-generic-password
+- [x] Read Claude Code OAuth credentials via `security find-generic-password
   -s "Claude Code-credentials" -w`; parse `claudeAiOauth.accessToken` /
-  `expiresAt`. **Confirm reads work without recurring prompts across
-  rebuilds** before building on it.
-- [ ] **Verify endpoint contract empirically first** (curl): expected
-  `GET https://api.anthropic.com/api/oauth/usage` with `Authorization: Bearer`
-  + `anthropic-beta` header, returning 5h/7d utilization + reset timestamps.
-  Undocumented endpoint — capture the real response before writing the
-  decoder; feature-detect optional fields (e.g. Opus weekly).
-- [ ] Map to metrics: Session (percent, resetsAt), Weekly (percent, resetsAt),
-  plus any model-specific weekly gauges present.
-- [ ] Expired/absent token → `.authRequired("Open Claude Code to sign in")`,
-  cached gauges retained. tokmon never refreshes or writes tokens — refresh
-  rotation would invalidate Claude Code's copy; Claude Code owns that
-  lifecycle. **Verify actual access-token lifetime empirically** — if it's
-  short, authRequired-between-sessions is the normal state and the UX above
-  is what makes that acceptable.
-- [ ] Poll every 5 min (a 5h window doesn't need 60s resolution, and a
-  foreign client replaying the token at high frequency is asking for
-  anti-abuse attention).
+  `expiresAt`. Confirmed: reads work without prompts across rebuilds.
+- [x] Endpoint verified empirically (HTTP 200): the response's `limits`
+  array is the general source (session / weekly_all / weekly_scoped with
+  model display names) and is preferred; `five_hour`/`seven_day` kept as
+  fallback. Timestamps have fractional seconds — custom ISO8601 decoding.
+  Also present: `spend`/`extra_usage` credits (mapped to an Extra credits
+  metric when used > 0).
+- [x] Map to metrics: Session, Weekly, Weekly (per-model scoped), Extra
+  credits. Unknown limit kinds render with a humanized label, not dropped.
+- [x] Expired/absent token → `.authRequired`, cached gauges retained;
+  tokens never refreshed/written. Token lifetime observed ~4.7h remaining
+  at check — Claude Code keeps it fresh while in use.
+- [x] Poll every 5 min.
 
 **Risks:** undocumented endpoint may change shape or gain stricter client
 checks; token replay from a non-Claude-Code client is gray-area — mitigated

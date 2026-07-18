@@ -3,17 +3,23 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var store: SettingsStore
 
-    private var providerInfos: [ProviderInfo] {
+    private struct Row: Identifiable {
+        let id: String
+        let displayName: String
+        let enabledByDefault: Bool
+    }
+
+    private var rows: [Row] {
         ProviderRegistry.allProviders().map {
-            ProviderInfo(id: $0.id, descriptor: $0.descriptor)
+            Row(id: $0.id, displayName: $0.descriptor.displayName, enabledByDefault: $0.enabledByDefault)
         }
     }
 
     var body: some View {
         Form {
             Section("Providers") {
-                ForEach(providerInfos) { info in
-                    Toggle(info.descriptor.displayName, isOn: binding(for: info.id))
+                ForEach(rows) { row in
+                    Toggle(row.displayName, isOn: binding(for: row))
                 }
             }
             Text("Provider changes take effect after relaunch.")
@@ -25,10 +31,10 @@ struct SettingsView: View {
         .fixedSize()
     }
 
-    private func binding(for providerID: String) -> Binding<Bool> {
+    private func binding(for row: Row) -> Binding<Bool> {
         Binding(
-            get: { store.settings.isEnabled(providerID) },
-            set: { store.setEnabled(providerID, $0) }
+            get: { store.settings.isEnabled(row.id, default: row.enabledByDefault) },
+            set: { store.setEnabled(row.id, $0) }
         )
     }
 }

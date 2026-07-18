@@ -94,7 +94,7 @@ actor RefreshEngine {
         lastAttempt[id] = Date()
         inFlight[id] = Task {
             await self.performFetch(provider)
-            await self.clearInFlight(id)
+            self.clearInFlight(id)
         }
     }
 

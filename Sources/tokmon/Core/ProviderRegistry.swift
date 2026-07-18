@@ -4,12 +4,15 @@ enum ProviderRegistry {
     /// Every provider tokmon knows about, in display order.
     static func allProviders() -> [any UsageProvider] {
         [
+            ClaudeSubscriptionProvider(),
             MockProvider(),
             MockDegradingProvider(),
         ]
     }
 
     static func enabledProviders(settings: AppSettings) -> [any UsageProvider] {
-        allProviders().filter { settings.isEnabled($0.id) }
+        allProviders().filter {
+            settings.isEnabled($0.id, default: $0.enabledByDefault)
+        }
     }
 }

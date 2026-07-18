@@ -6,6 +6,7 @@ struct MockProvider: UsageProvider {
     let id = "mock-claude"
     let descriptor = ProviderDescriptor(displayName: "Mock Claude", systemImage: "sparkle")
     let refreshInterval: TimeInterval = 30
+    let enabledByDefault = false
 
     func fetchSnapshot() async throws -> ProviderSnapshot {
         try await Task.sleep(for: .milliseconds(300))
@@ -67,6 +68,7 @@ final class MockDegradingProvider: UsageProvider, Sendable {
     let id = "mock-degrading"
     let descriptor = ProviderDescriptor(displayName: "Mock Codex", systemImage: "terminal")
     let refreshInterval: TimeInterval = 45
+    let enabledByDefault = false
 
     private let fetchCounter = Counter()
 
