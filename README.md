@@ -12,6 +12,11 @@ layout survive the menu bar's template rendering; a dimmed row means the
 value is cached from a degraded provider (stale or auth needed). Opening
 the menu shows full per-provider gauges with reset countdowns.
 
+<p align="center">
+  <img src="docs/images/menu.png" alt="tokmon menu bar widget and expanded menu with per-provider usage gauges" width="440">
+  <img src="docs/images/settings.png" alt="tokmon Settings window: provider toggles, menu bar options, launch at login, Anthropic API key" width="300">
+</p>
+
 ## Providers
 
 - **Claude subscription** — session (5h), weekly, and model-scoped weekly
@@ -105,3 +110,7 @@ stay visible with a hint.
 - Notifications on threshold crossing
 - Historical charts / per-project cost breakdowns (Claude Code JSONL)
 - App bundle + signing for distribution
+
+## License
+
+MIT — see [LICENSE](LICENSE).
