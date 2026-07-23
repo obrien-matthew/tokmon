@@ -52,7 +52,7 @@ jobs:
           VERSION: ${{ steps.metadata.outputs.version }}
         run: ./Scripts/package-dmg.sh ".build/${{ steps.metadata.outputs.filename }}"
       - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tokmon-dmg-${{ github.ref_name }}
           path: .build/${{ steps.metadata.outputs.filename }}
@@ -67,7 +67,7 @@ jobs:
       contents: write
     steps:
       - name: Download packaged DMG
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tokmon-dmg-${{ github.ref_name }}
           path: dist
