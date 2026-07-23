@@ -15,7 +15,7 @@ struct MetricGaugeRow: View {
                 if let resetsAt = metric.window?.resetsAt {
                     CountdownText(resetsAt: resetsAt)
                 }
-                Text(valueText)
+                Text(Self.valueText(for: metric))
                     .font(.callout)
                     .monospacedDigit()
             }
@@ -42,12 +42,16 @@ struct MetricGaugeRow: View {
         }
     }
 
-    private var valueText: String {
+    static func valueText(for metric: UsageMetric) -> String {
         switch metric.unit {
         case .percent:
             "\(Int(metric.used.rounded()))%"
         case .usd:
-            String(format: "$%.2f", metric.used)
+            if let limit = metric.limit {
+                "\(dollarAmount(metric.used)) / \(dollarAmount(limit))"
+            } else {
+                dollarAmount(metric.used)
+            }
         case .credits:
             "\(Self.creditAmount(metric.used)) credits"
         case .tokens:
@@ -63,6 +67,10 @@ struct MetricGaugeRow: View {
                 "\(Int(metric.used))"
             }
         }
+    }
+
+    private static func dollarAmount(_ value: Double) -> String {
+        String(format: "$%.2f", value)
     }
 
     static func creditAmount(_ value: Double) -> String {

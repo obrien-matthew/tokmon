@@ -29,7 +29,7 @@ struct TokmonApp: App {
         let state = AppState(
             providers: providers,
             cached: cached,
-            headlineProviderID: settingsStore.settings.headlineProviderID
+            headlineMetricOverrides: settingsStore.settings.headlineMetricOverrides
         )
         let engine = RefreshEngine(providers: providers, cache: cache, initial: cached) { snapshot in
             await state.apply(snapshot)
@@ -55,7 +55,7 @@ struct TokmonApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView(store: settingsStore)
+            SettingsView(store: settingsStore, state: state)
         }
     }
 }

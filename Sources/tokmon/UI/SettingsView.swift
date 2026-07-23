@@ -2,18 +2,19 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var store: SettingsStore
-    @State private var adminKeyInput = ""
+    @ObservedObject var state: AppState
     @State private var launchAtLogin = LaunchAgent.isInstalled
     @State private var launchAtLoginError: String?
-    @State private var adminKeyStatus = SecurityCLI.hasGenericPassword(
-        service: AnthropicAPIProvider.keychainService,
-        account: AnthropicAPIProvider.keychainAccount
-    ) ? "A key is stored in the Keychain." : "No key stored."
 
     private struct Row: Identifiable {
         let id: String
         let displayName: String
         let enabledByDefault: Bool
+    }
+
+    private struct MetricOption: Identifiable {
+        let id: String
+        let label: String
     }
 
     private var rows: [Row] {
@@ -30,10 +31,16 @@ struct SettingsView: View {
                 }
             }
             Section("Menu bar") {
-                Picker("Title shows", selection: headlineBinding) {
-                    Text("All providers (auto)").tag(String?.none)
-                    ForEach(rows) { row in
-                        Text(row.displayName).tag(String?.some(row.id))
+                ForEach(state.providers) { provider in
+                    Picker("\(provider.descriptor.displayName) bar", selection: headlineMetricBinding(for: provider.id)) {
+                        Text("Auto").tag(String?.none)
+                        ForEach(metricOptions(for: provider.id)) { option in
+                            Text(option.label).tag(String?.some(option.id))
+                        }
+                        if let selected = store.settings.headlineMetricOverrides[provider.id],
+                           !metricOptions(for: provider.id).contains(where: { $0.id == selected }) {
+                            Text("Unavailable (using Auto)").tag(String?.some(selected))
+                        }
                     }
                 }
             }
@@ -48,33 +55,29 @@ struct SettingsView: View {
                         .foregroundStyle(.red)
                 }
             }
-            Text("Provider and menu bar changes take effect after relaunch.")
+            Text("Provider changes take effect after relaunch; menu bar choices apply immediately.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Section("Anthropic API") {
-                SecureField("Admin API key (sk-ant-admin01-...)", text: $adminKeyInput)
-                HStack {
-                    Button("Save key") { saveAdminKey() }
-                        .disabled(adminKeyInput.isEmpty)
-                    Text(adminKeyStatus)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Text("Requires an organization account; see docs/action-items/001.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
         }
         .formStyle(.grouped)
         .frame(width: 340)
         .fixedSize()
     }
 
-    private var headlineBinding: Binding<String?> {
+    private func headlineMetricBinding(for providerID: String) -> Binding<String?> {
         Binding(
-            get: { store.settings.headlineProviderID },
-            set: { store.settings.headlineProviderID = $0 }
+            get: { store.settings.headlineMetricOverrides[providerID] },
+            set: { metricID in
+                store.setHeadlineMetric(metricID, for: providerID)
+                state.setHeadlineMetric(metricID, for: providerID)
+            }
         )
+    }
+
+    private func metricOptions(for providerID: String) -> [MetricOption] {
+        (state.snapshots[providerID]?.metrics ?? [])
+            .filter { $0.kind == .rateLimitWindow && $0.fraction != nil }
+            .map { MetricOption(id: $0.id, label: $0.label) }
     }
 
     private func toggleLaunchAtLogin(_ enabled: Bool) {
@@ -88,20 +91,6 @@ struct SettingsView: View {
         } catch {
             launchAtLoginError = "Failed: \(error.localizedDescription)"
             launchAtLogin = LaunchAgent.isInstalled
-        }
-    }
-
-    private func saveAdminKey() {
-        do {
-            try SecurityCLI.addGenericPassword(
-                service: AnthropicAPIProvider.keychainService,
-                account: AnthropicAPIProvider.keychainAccount,
-                secret: adminKeyInput
-            )
-            adminKeyInput = ""
-            adminKeyStatus = "Key saved. Takes effect on next refresh."
-        } catch {
-            adminKeyStatus = "Save failed: \(error.localizedDescription)"
         }
     }
 

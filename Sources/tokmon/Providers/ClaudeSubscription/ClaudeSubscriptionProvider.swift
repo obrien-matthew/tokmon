@@ -161,10 +161,14 @@ struct ClaudeSubscriptionProvider: UsageProvider {
             }
         }
 
-        if let used = usage.spend?.used?.dollars, used > 0 {
+        let reportedUsed = usage.spend?.used?.dollars
+        let reportedLimit = usage.spend?.limit?.dollars
+        let used = reportedUsed.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        let limit = reportedLimit.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+        if used != nil || limit != nil {
             metrics.append(UsageMetric(
                 id: "extra-credits", label: "Extra credits", kind: .spend,
-                used: used, limit: usage.spend?.limit?.dollars, unit: .usd,
+                used: used ?? 0, limit: limit, unit: .usd,
                 window: nil
             ))
         }

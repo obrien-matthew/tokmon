@@ -5,8 +5,31 @@ struct AppSettings: Codable, Sendable, Equatable {
     /// to the provider's own default, so new providers appear (and mock
     /// providers stay hidden) without a settings migration.
     var providerOverrides: [String: Bool] = [:]
-    /// nil = auto (most-constrained metric across all providers).
-    var headlineProviderID: String?
+    /// Missing provider key = Auto (session-first, then most constrained).
+    var headlineMetricOverrides: [String: String] = [:]
+
+    private enum CodingKeys: String, CodingKey {
+        case providerOverrides
+        case headlineMetricOverrides
+    }
+
+    init(
+        providerOverrides: [String: Bool] = [:],
+        headlineMetricOverrides: [String: String] = [:]
+    ) {
+        self.providerOverrides = providerOverrides
+        self.headlineMetricOverrides = headlineMetricOverrides
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        providerOverrides = try container.decodeIfPresent(
+            [String: Bool].self, forKey: .providerOverrides
+        ) ?? [:]
+        headlineMetricOverrides = try container.decodeIfPresent(
+            [String: String].self, forKey: .headlineMetricOverrides
+        ) ?? [:]
+    }
 
     func isEnabled(_ providerID: String, default defaultValue: Bool) -> Bool {
         providerOverrides[providerID] ?? defaultValue
@@ -34,6 +57,14 @@ final class SettingsStore: ObservableObject {
 
     func setEnabled(_ providerID: String, _ enabled: Bool) {
         settings.providerOverrides[providerID] = enabled
+    }
+
+    func setHeadlineMetric(_ metricID: String?, for providerID: String) {
+        if let metricID {
+            settings.headlineMetricOverrides[providerID] = metricID
+        } else {
+            settings.headlineMetricOverrides.removeValue(forKey: providerID)
+        }
     }
 
     private func save() {
