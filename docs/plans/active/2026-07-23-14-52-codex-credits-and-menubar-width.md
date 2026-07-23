@@ -8,8 +8,8 @@
 
 ## Phase 2: Menu-bar rendering
 
-- [ ] Let the percentage text use its intrinsic horizontal width so `100` is not clipped.
-- [ ] Preserve the current one-row and compact two-row heights.
+- [x] Let the percentage text use its intrinsic horizontal width so `100` is not clipped.
+- [x] Preserve the current one-row and compact two-row heights.
 
 ## Phase 3: Verification and documentation
 

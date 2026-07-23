@@ -89,7 +89,8 @@ struct MenuBarRowsView: View {
             }
             Text("\(row.percent)")
                 .font(.system(size: compact ? 8 : 11, weight: .semibold, design: .monospaced))
-                .frame(width: compact ? 13 : 17, alignment: .trailing)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: compact ? 13 : 17, alignment: .trailing)
         }
         .frame(height: compact ? 8 : 14)
     }
