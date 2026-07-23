@@ -10,9 +10,9 @@
 
 ## Phase 2: Remove Anthropic API support
 
-- [ ] Remove the Anthropic API provider and registry entry.
-- [ ] Remove its settings UI, orphaned Keychain write helpers, and action item.
-- [ ] Remove current README references while preserving historical plans and stored user data.
+- [x] Remove the Anthropic API provider and registry entry.
+- [x] Remove its settings UI, orphaned Keychain write helpers, and action item.
+- [x] Remove current README references while preserving historical plans and stored user data.
 
 ## Phase 3: Package and release DMGs
 

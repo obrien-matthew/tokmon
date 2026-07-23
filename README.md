@@ -1,8 +1,8 @@
 # tokmon
 
 A macOS menu bar app that tracks AI provider usage limits at a glance:
-Claude subscription session (5h) and weekly limits, Anthropic API spend,
-and Codex/ChatGPT rate limits and remaining credits.
+Claude subscription session (5h), weekly, and extra-credit limits, plus
+Codex/ChatGPT rate limits and remaining credits.
 
 The menu bar title stacks one micro-row per provider (up to two): a glyph
 (C = Claude, X = Codex), a tiny gauge bar, and the percent of that
@@ -14,7 +14,7 @@ the menu shows full per-provider gauges with reset countdowns.
 
 <p align="center">
   <img src="docs/images/menu.png" alt="tokmon menu bar widget and expanded menu with per-provider usage gauges" width="440">
-  <img src="docs/images/settings.png" alt="tokmon Settings window: provider toggles, menu bar options, launch at login, Anthropic API key" width="300">
+  <img src="docs/images/settings.png" alt="tokmon Settings window: provider toggles, menu bar options, and launch at login" width="300">
 </p>
 
 ## Providers
@@ -30,16 +30,12 @@ the menu shows full per-provider gauges with reset countdowns.
   transcripts when the live call fails;
   fallback data is as fresh as your last Codex turn and the UI shows its
   actual age. See `docs/guides/codex-data-sources.md`.
-- **Anthropic API** — month-to-date USD spend via the Admin cost report
-  API. Needs an Admin API key (organization accounts only) entered in
-  Settings; see `docs/action-items/001-create-anthropic-admin-key.md`.
 - **Mocks** — two dev providers (disabled by default, toggleable in
   Settings) exercising every metric kind and the degraded/stale paths.
 
-Settings also cover per-provider enable/disable, a menu bar title override
-(pin one provider instead of auto most-constrained), and launch at login
-(a launchd agent plist, since a bare SwiftPM executable can't use
-SMAppService).
+Settings also cover per-provider enable/disable, the rate-limit bar shown
+for each provider in the menu bar, and launch at login (a launchd agent
+plist, since a bare SwiftPM executable can't use SMAppService).
 
 ## Build and run
 
