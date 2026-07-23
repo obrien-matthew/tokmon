@@ -24,7 +24,7 @@
 
 ## Phase 4: Verification and closure
 
-- [ ] Run Swift tests and debug/release builds.
-- [ ] Run shell syntax, app signature, and DMG verification checks.
-- [ ] Confirm the worktree contains only intended changes.
-- [ ] Move this plan to `docs/plans/completed`.
+- [x] Run Swift tests and debug/release builds.
+- [x] Run shell syntax, app signature, and DMG verification checks.
+- [x] Confirm the worktree contains only intended changes.
+- [x] Move this plan to `docs/plans/completed`.
