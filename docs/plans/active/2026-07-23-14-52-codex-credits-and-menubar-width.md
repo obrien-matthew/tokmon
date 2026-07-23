@@ -13,7 +13,7 @@
 
 ## Phase 3: Verification and documentation
 
-- [ ] Add focused tests for credits decoding/mapping and headline exclusion.
-- [ ] Update README and the Codex data-source guide.
-- [ ] Run the test suite and debug/release builds.
+- [x] Add focused tests for credits decoding/mapping and headline exclusion.
+- [x] Update README and the Codex data-source guide.
+- [x] Run the test suite and debug/release builds.
 - [ ] Move this plan to `docs/plans/completed` when all work is complete.

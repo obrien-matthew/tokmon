@@ -5,6 +5,7 @@ let package = Package(
     name: "tokmon",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "tokmon", path: "Sources/tokmon")
+        .executableTarget(name: "tokmon", path: "Sources/tokmon"),
+        .testTarget(name: "tokmonTests", dependencies: ["tokmon"], path: "Tests/tokmonTests")
     ]
 )

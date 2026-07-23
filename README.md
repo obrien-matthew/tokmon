@@ -2,7 +2,7 @@
 
 A macOS menu bar app that tracks AI provider usage limits at a glance:
 Claude subscription session (5h) and weekly limits, Anthropic API spend,
-and Codex/ChatGPT rate limits.
+and Codex/ChatGPT rate limits and remaining credits.
 
 The menu bar title stacks one micro-row per provider (up to two): a glyph
 (C = Claude, X = Codex), a tiny gauge bar, and the percent of that
@@ -23,10 +23,11 @@ the menu shows full per-provider gauges with reset countdowns.
   limits, plus extra-usage credits. Reads Claude Code's OAuth credentials
   from the Keychain (read-only; tokmon never refreshes or writes tokens)
   and polls the same usage endpoint `/usage` reads, every 5 minutes.
-- **Codex** — session/weekly rate limits, live from the same ChatGPT
-  usage endpoint Codex's `/status` uses (read-only reuse of the CLI's
-  OAuth token), polled every 5 minutes. Falls back to the rate-limit
-  snapshots in `~/.codex/sessions` transcripts when the live call fails;
+- **Codex** — session/weekly rate limits and remaining credit balance,
+  live from the same ChatGPT usage endpoint Codex's `/status` uses
+  (read-only reuse of the CLI's OAuth token), polled every 5 minutes.
+  Falls back to the rate-limit snapshots in `~/.codex/sessions`
+  transcripts when the live call fails;
   fallback data is as fresh as your last Codex turn and the UI shows its
   actual age. See `docs/guides/codex-data-sources.md`.
 - **Anthropic API** — month-to-date USD spend via the Admin cost report

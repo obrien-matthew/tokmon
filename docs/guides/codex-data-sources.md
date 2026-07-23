@@ -17,7 +17,13 @@ Endpoint and headers were confirmed against the open Codex CLI source
 `/api/codex/usage` form is for the other path style). Response carries
 `rate_limit.primary_window` / `secondary_window` with `used_percent`,
 `limit_window_seconds` (604800 = weekly, 18000 = 5h), `reset_at` (unix
-seconds), plus plan/credits fields tokmon ignores.
+seconds), plus plan and credits fields.
+
+The top-level `credits` object supplies `has_credits`, `unlimited`, and a
+decimal-string `balance`. Tokmon maps a finite, nonnegative balance to an
+open-ended **Credits remaining** metric. A reported zero is shown even when
+`has_credits` is false; unlimited balances are omitted because the universal
+metric model is numeric. This is a remaining balance, not cumulative spend.
 
 Token posture matches the Claude provider: read-only use of the CLI's
 stored token, never refreshed or written (access tokens observed lasting
@@ -34,7 +40,8 @@ Codex CLI persists rate-limit snapshots in its session transcripts:
   - `primary` / `secondary`: `{used_percent, window_minutes, resets_at}`
     where `window_minutes` 300 = 5h session, 10080 = weekly, and
     `resets_at` is unix seconds
-  - `plan_type` (e.g. "plus"), `credits`, `limit_id`
+  - `plan_type` (e.g. "plus"), `credits`, `limit_id`; the same remaining
+    credits metric is emitted from this fallback data
 - tokmon scans the 5 newest files (by mtime) and takes the last matching
   line — the freshest snapshot on disk.
 
