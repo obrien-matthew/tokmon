@@ -16,4 +16,4 @@
 - [x] Add focused tests for credits decoding/mapping and headline exclusion.
 - [x] Update README and the Codex data-source guide.
 - [x] Run the test suite and debug/release builds.
-- [ ] Move this plan to `docs/plans/completed` when all work is complete.
+- [x] Move this plan to `docs/plans/completed` when all work is complete.
