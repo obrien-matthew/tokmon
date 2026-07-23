@@ -1,16 +1,11 @@
-name: Build
+name: Build and package
 
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
+    tags: ["v*"]
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
 
 # macOS runners bill at 10x; don't stack builds on rapid pushes.
 concurrency:
@@ -18,11 +13,71 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  test:
     runs-on: macos-15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
       - name: Toolchain info
         run: swift --version && xcodebuild -version
-      - name: Build
-        run: swift build
+      - name: Test
+        run: swift test
+      - name: Release build
+        run: swift build -c release
+
+  package:
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - name: Resolve package metadata
+        id: metadata
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            filename="tokmon-${GITHUB_REF_NAME}.dmg"
+          else
+            version="0.1.0"
+            filename="tokmon-main-${GITHUB_SHA:0:7}.dmg"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "filename=$filename" >> "$GITHUB_OUTPUT"
+      - name: Package DMG
+        env:
+          VERSION: ${{ steps.metadata.outputs.version }}
+        run: ./Scripts/package-dmg.sh ".build/${{ steps.metadata.outputs.filename }}"
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tokmon-dmg-${{ github.ref_name }}
+          path: .build/${{ steps.metadata.outputs.filename }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged DMG
+        uses: actions/download-artifact@v4
+        with:
+          name: tokmon-dmg-${{ github.ref_name }}
+          path: dist
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.dmg --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.dmg --verify-tag --generate-notes
+          fi

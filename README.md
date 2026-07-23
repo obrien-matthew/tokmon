@@ -14,7 +14,6 @@ the menu shows full per-provider gauges with reset countdowns.
 
 <p align="center">
   <img src="docs/images/menu.png" alt="tokmon menu bar widget and expanded menu with per-provider usage gauges" width="440">
-  <img src="docs/images/settings.png" alt="tokmon Settings window: provider toggles, menu bar options, and launch at login" width="300">
 </p>
 
 ## Providers
@@ -54,6 +53,22 @@ quick development iteration without installing:
 ```sh
 swift run
 ```
+
+Create a distributable disk image locally with:
+
+```sh
+./Scripts/package-dmg.sh
+```
+
+The resulting `.build/tokmon.dmg` contains the app and an Applications
+shortcut. The app is ad-hoc signed, not Developer ID signed or notarized,
+so downloaded builds may require the usual macOS approval for an
+unidentified developer.
+
+GitHub Actions runs tests on pull requests. Every push to `main` packages
+a DMG as a 14-day workflow artifact. Pushing a semantic version tag such
+as `v0.2.0` packages the same DMG and creates a permanent GitHub Release
+with generated release notes.
 
 The app runs as a menu bar accessory (no Dock icon). Quit from the menu.
 A single-instance guard in the bundled app prevents double-launching from

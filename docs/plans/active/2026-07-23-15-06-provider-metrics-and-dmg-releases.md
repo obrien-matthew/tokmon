@@ -16,11 +16,11 @@
 
 ## Phase 3: Package and release DMGs
 
-- [ ] Extract reusable ad-hoc app packaging from the local installer.
-- [ ] Add deterministic DMG creation with signature and image verification.
-- [ ] Upload a DMG artifact for every push to `main`.
-- [ ] Publish that packaged DMG as a GitHub Release only for `v*` tags.
-- [ ] Document local packaging, artifacts, tags, and the lack of notarization.
+- [x] Extract reusable ad-hoc app packaging from the local installer.
+- [x] Add deterministic DMG creation with signature and image verification.
+- [x] Upload a DMG artifact for every push to `main`.
+- [x] Publish that packaged DMG as a GitHub Release only for `v*` tags.
+- [x] Document local packaging, artifacts, tags, and the lack of notarization.
 
 ## Phase 4: Verification and closure
 
