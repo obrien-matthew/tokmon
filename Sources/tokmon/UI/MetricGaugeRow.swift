@@ -48,6 +48,8 @@ struct MetricGaugeRow: View {
             "\(Int(metric.used.rounded()))%"
         case .usd:
             String(format: "$%.2f", metric.used)
+        case .credits:
+            "\(Self.creditAmount(metric.used)) credits"
         case .tokens:
             if let limit = metric.limit {
                 "\(Self.abbreviated(metric.used)) / \(Self.abbreviated(limit))"
@@ -61,6 +63,13 @@ struct MetricGaugeRow: View {
                 "\(Int(metric.used))"
             }
         }
+    }
+
+    static func creditAmount(_ value: Double) -> String {
+        var text = String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), value)
+        while text.last == "0" { text.removeLast() }
+        if text.last == "." { text.removeLast() }
+        return text
     }
 
     static func abbreviated(_ value: Double) -> String {

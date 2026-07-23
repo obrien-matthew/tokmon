@@ -13,6 +13,7 @@ enum MetricKind: String, Codable, Sendable {
 enum MetricUnit: String, Codable, Sendable {
     case percent
     case usd
+    case credits
     case tokens
     case requests
 }

@@ -61,6 +61,35 @@ struct CodexProvider: UsageProvider {
             let secondaryWindow: Window?
         }
         let rateLimit: RateLimit?
+        let credits: Credits?
+    }
+
+    /// Shared by the live endpoint and the persisted session snapshot.
+    /// The backend currently sends balance as a decimal string, but accepting
+    /// a JSON number keeps this undocumented boundary tolerant of drift.
+    struct Credits: Decodable {
+        let hasCredits: Bool?
+        let unlimited: Bool?
+        let balance: Double?
+
+        private enum CodingKeys: String, CodingKey {
+            case hasCredits
+            case unlimited
+            case balance
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            hasCredits = try container.decodeIfPresent(Bool.self, forKey: .hasCredits)
+            unlimited = try container.decodeIfPresent(Bool.self, forKey: .unlimited)
+            if let number = try? container.decode(Double.self, forKey: .balance) {
+                balance = number
+            } else if let string = try? container.decode(String.self, forKey: .balance) {
+                balance = Double(string)
+            } else {
+                balance = nil
+            }
+        }
     }
 
     private func fetchLive() async throws -> ProviderSnapshot {
@@ -83,6 +112,14 @@ struct CodexProvider: UsageProvider {
         }
 
         let usage = try decoder.decode(WhamUsage.self, from: data)
+        let metrics = Self.metrics(from: usage)
+        guard !metrics.isEmpty else {
+            throw URLError(.cannotParseResponse)
+        }
+        return ProviderSnapshot(providerID: id, fetchedAt: Date(), status: .ok, metrics: metrics)
+    }
+
+    static func metrics(from usage: WhamUsage) -> [UsageMetric] {
         var metrics: [UsageMetric] = []
         let windows = [
             ("primary", usage.rateLimit?.primaryWindow),
@@ -97,10 +134,10 @@ struct CodexProvider: UsageProvider {
                 resetsAt: window.resetAt.map { Date(timeIntervalSince1970: $0) }
             ))
         }
-        guard !metrics.isEmpty else {
-            throw URLError(.cannotParseResponse)
+        if let credits = creditsMetric(from: usage.credits) {
+            metrics.append(credits)
         }
-        return ProviderSnapshot(providerID: id, fetchedAt: Date(), status: .ok, metrics: metrics)
+        return metrics
     }
 
     // MARK: - Session file fallback
@@ -118,6 +155,7 @@ struct CodexProvider: UsageProvider {
         }
         let primary: Window?
         let secondary: Window?
+        let credits: Credits?
         let planType: String?
     }
 
@@ -192,7 +230,29 @@ struct CodexProvider: UsageProvider {
                 resetsAt: window.resetsAt.map { Date(timeIntervalSince1970: $0) }
             ))
         }
+        if let credits = creditsMetric(from: limits.credits) {
+            metrics.append(credits)
+        }
         return metrics
+    }
+
+    static func creditsMetric(from credits: Credits?) -> UsageMetric? {
+        guard let credits,
+              credits.unlimited != true,
+              let balance = credits.balance,
+              balance.isFinite,
+              balance >= 0
+        else { return nil }
+
+        return UsageMetric(
+            id: "credits-remaining",
+            label: "Credits remaining",
+            kind: .quota,
+            used: balance,
+            limit: nil,
+            unit: .credits,
+            window: nil
+        )
     }
 
     // MARK: - Shared mapping
