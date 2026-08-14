@@ -25,10 +25,22 @@ open-ended **Credits remaining** metric. A reported zero is shown even when
 `has_credits` is false; unlimited balances are omitted because the universal
 metric model is numeric. This is a remaining balance, not cumulative spend.
 
-Token posture matches the Claude provider: read-only use of the CLI's
-stored token, never refreshed or written (access tokens observed lasting
-several days; Codex CLI refreshes them on use). Any live failure falls
-back to session file parsing below.
+Token posture matches the Claude provider: read-only use of stored
+tokens, never refreshed or written. Credentials are tried in order:
+
+1. `~/.codex/auth.json` (`tokens.access_token` + `tokens.account_id`) —
+   Codex CLI's copy, refreshed by the CLI on use.
+2. oh-my-pi's credential store, `~/.omp/agent/agent.db` (SQLite, WAL),
+   table `auth_credentials`, row `provider = 'openai-codex'`,
+   `credential_type = 'oauth'`; the JSON `data` column carries `access`,
+   `accountId`, and `expires` (epoch ms). Verified live 2026-08-14 that
+   the wham/usage endpoint accepts omp-minted tokens (HTTP 200, same
+   response shape). Read via `OmpCredentialStore`; expired rows are
+   skipped, and any read failure (missing db, busy WAL checkpoint,
+   schema drift) just drops the candidate.
+
+Any live failure with every candidate falls back to session file
+parsing below.
 
 ## Fallback: session file parsing
 
@@ -62,3 +74,8 @@ nothing but could overstate usage by a full day of decay.
   the decoder treats every field as optional.
 - Older session files may predate rate-limit reporting; the scanner falls
   through up to 5 files before reporting "no data".
+- The `agent.db` schema is omp-internal and may change between omp
+  versions; `OmpCredentialStore` treats every field as optional and any
+  failure means "no omp credential", never an error.
+- Nothing enforces that omp is signed into the same ChatGPT account as
+  Codex CLI; a fallback fetch would report the omp account's usage.

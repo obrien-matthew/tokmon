@@ -1,6 +1,6 @@
 # oh-my-pi credential fallback for Claude and Codex providers
 
-Status: awaiting approval
+Status: completed 2026-08-14
 
 ## Problem
 
@@ -53,13 +53,13 @@ to the UI, since omp is an optional source.
 
 ### Phase 1 — OmpCredentialStore
 
-- [ ] `Sources/tokmon/Core/OmpCredentialStore.swift`:
+- [x] `Sources/tokmon/Core/OmpCredentialStore.swift`:
   - `struct OmpOAuthCredential { let accessToken: String; let accountId: String?; let expiresAt: Date? }`
   - `enum OmpCredentialStore { static func credential(provider: String, databaseURL: URL = default) -> OmpOAuthCredential? }`
   - Query: `SELECT data FROM auth_credentials WHERE provider = ? AND credential_type = 'oauth' AND disabled_cause IS NULL ORDER BY updated_at DESC LIMIT 1` (bound parameter; newest row wins if omp ever holds multiple accounts per provider).
   - JSON decode of the `data` column; `expires` ms → `Date`.
   - All failures return nil.
-- [ ] Tests (`OmpCredentialStoreTests`): build a fixture SQLite db in a
+- [x] Tests (`OmpCredentialStoreTests`): build a fixture SQLite db in a
   temp directory via the same C API, **in WAL mode** (`PRAGMA
   journal_mode=WAL`) so the test exercises the same journal mode as
   production. Cases: valid row, expired vs unexpired ms timestamp,
@@ -68,44 +68,50 @@ to the UI, since omp is an optional source.
 
 ### Phase 2 — Claude provider fallback
 
-- [ ] Refactor `loadAccessToken()` into a candidate list:
+- [x] Refactor `loadAccessToken()` into a candidate list:
   1. Claude Code Keychain token (existing decode + ms-expiry check),
   2. omp `anthropic` credential (skip if `expiresAt` past).
-- [ ] `fetchSnapshot()` iterates candidates; 401/403 advances to the
+- [x] `fetchSnapshot()` iterates candidates; 401/403 advances to the
   next candidate; other HTTP errors still throw immediately. All
   candidates exhausted → `authRequired`.
-- [ ] Hint precedence when all candidates fail (review finding): if any
+- [x] Hint precedence when all candidates fail (review finding): if any
   candidate existed but was expired → "Open Claude Code or omp to
   refresh login"; if none were found at all → "Open Claude Code or omp
   to sign in". Never surface a hint naming only one harness.
-- [ ] Extract the expiry-check + candidate-ordering logic into a
+- [x] Extract the expiry-check + candidate-ordering logic into a
   testable pure function; unit-test ordering and expiry skipping.
 
 ### Phase 3 — Codex provider fallback
 
-- [ ] Parameterize `fetchLive()` with `(token, accountId)`.
-- [ ] Candidates: `~/.codex/auth.json` (existing, no expiry field —
+- [x] Parameterize `fetchLive()` with `(token, accountId)`.
+- [x] Candidates: `~/.codex/auth.json` (existing, no expiry field —
   always a candidate when present), then omp `openai-codex` credential
   (has both `access` and `accountId`; skip if expired).
-- [ ] Try live fetch per candidate; any live failure falls through to
+- [x] Try live fetch per candidate; any live failure falls through to
   the next, then to the existing session-file fallback, then
   `authRequired` with hint mentioning both harnesses.
-- [ ] Unit-test candidate assembly (pure function), not the network.
+- [x] Unit-test candidate assembly (pure function), not the network.
 
 ### Phase 4 — Docs and verification
 
-- [ ] README: Providers section — note the omp fallback credential
+- [x] README: Providers section — note the omp fallback credential
   source for both providers; Architecture tree gains
   `OmpCredentialStore.swift`.
-- [ ] `docs/guides/codex-data-sources.md`: add omp as a second token
+- [x] `docs/guides/codex-data-sources.md`: add omp as a second token
   source.
-- [ ] Verify: `swift test`; smoke = build + run installed app, confirm
+- [x] Verify: `swift test`; smoke = build + run installed app, confirm
   both providers fetch OK (candidate 1 path). Endpoint acceptance of
   omp tokens was already proven live during planning (both endpoints
   200, see Approach); repeat via a one-off Swift harness that feeds the
   `OmpCredentialStore`-loaded credential through each provider's
   request path and asserts HTTP 200 (never prints tokens).
-- [ ] Move plan to `docs/plans/completed/`.
+- [x] Move plan to `docs/plans/completed/`.
+
+Deviation from plan: the "one-off Swift harness" became a permanent
+env-gated smoke (`OmpLiveSmokeTests`, runs only with
+`TOKMON_LIVE_SMOKE=1`, XCTSkip otherwise) — re-runnable protection
+against drift in two undocumented endpoints, invisible to CI. Both
+smoke tests passed live 2026-08-14 (HTTP 200, non-empty metrics).
 
 Commit after each phase.
 

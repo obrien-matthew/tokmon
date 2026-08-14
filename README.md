@@ -20,17 +20,24 @@ the menu shows full per-provider gauges with reset countdowns.
 
 - **Claude subscription** — session (5h), weekly, and model-scoped weekly
   limits, plus extra-usage credits. Reads Claude Code's OAuth credentials
-  from the Keychain (read-only; tokmon never refreshes or writes tokens)
-  and polls the same usage endpoint `/usage` reads, every 5 minutes.
+  from the Keychain, falling back to oh-my-pi's credential store
+  (`~/.omp/agent/agent.db`) when the Keychain token has expired unused
+  (both read-only; tokmon never refreshes or writes tokens), and polls
+  the same usage endpoint `/usage` reads, every 5 minutes.
 - **Codex** — session/weekly rate limits and remaining credit balance,
   live from the same ChatGPT usage endpoint Codex's `/status` uses
-  (read-only reuse of the CLI's OAuth token), polled every 5 minutes.
+  (read-only reuse of the CLI's OAuth token, with the same oh-my-pi
+  fallback), polled every 5 minutes.
   Falls back to the rate-limit snapshots in `~/.codex/sessions`
   transcripts when the live call fails;
   fallback data is as fresh as your last Codex turn and the UI shows its
   actual age. See `docs/guides/codex-data-sources.md`.
 - **Mocks** — two dev providers (disabled by default, toggleable in
   Settings) exercising every metric kind and the degraded/stale paths.
+
+Usage is accounted server-side per account, so tokens consumed through
+any harness on the same subscription (Claude Code, Codex CLI, oh-my-pi)
+are all reflected in the same gauges.
 
 Settings also cover per-provider enable/disable, the rate-limit bar shown
 for each provider in the menu bar, and launch at login (a launchd agent
@@ -95,6 +102,7 @@ Sources/tokmon/
 │   │                        cached metrics under a degraded status so the
 │   │                        widget never goes blank
 │   ├── SettingsStore.swift  explicit JSON (no UserDefaults — bundle-ID-less)
+│   ├── OmpCredentialStore.swift  read-only oh-my-pi token fallback (SQLite)
 │   ├── ProviderRegistry.swift
 │   └── AppState.swift     MainActor store + menu bar headline selection
 ├── UI/                    MetricGaugeRow is the single universal component
