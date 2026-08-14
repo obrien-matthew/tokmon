@@ -9,6 +9,60 @@ final class CodexProviderTests: XCTestCase {
         return decoder
     }
 
+    // MARK: - Credential candidate assembly
+
+    private let now = Date(timeIntervalSince1970: 1_786_710_000)
+
+    private var cliAuthJSON: Data {
+        Data(#"{"tokens":{"access_token":"tok-cli","account_id":"acct-cli"}}"#.utf8)
+    }
+
+    func testCliFirstThenOmp() {
+        let omp = OmpOAuthCredential(
+            accessToken: "tok-omp", accountId: "acct-omp",
+            expiresAt: now.addingTimeInterval(3600)
+        )
+        XCTAssertEqual(
+            CodexProvider.liveCredentials(authJSON: cliAuthJSON, omp: omp, now: now),
+            [
+                CodexProvider.LiveCredential(accessToken: "tok-cli", accountId: "acct-cli"),
+                CodexProvider.LiveCredential(accessToken: "tok-omp", accountId: "acct-omp")
+            ]
+        )
+    }
+
+    func testExpiredOmpCredentialSkipped() {
+        let omp = OmpOAuthCredential(
+            accessToken: "tok-omp", accountId: "acct-omp",
+            expiresAt: now.addingTimeInterval(-60)
+        )
+        XCTAssertEqual(
+            CodexProvider.liveCredentials(authJSON: nil, omp: omp, now: now),
+            []
+        )
+    }
+
+    func testOmpWithoutAccountIdSkipped() {
+        let omp = OmpOAuthCredential(accessToken: "tok-omp", accountId: nil, expiresAt: nil)
+        XCTAssertEqual(CodexProvider.liveCredentials(authJSON: nil, omp: omp, now: now), [])
+    }
+
+    func testMalformedAuthJSONFallsBackToOmp() {
+        let omp = OmpOAuthCredential(accessToken: "tok-omp", accountId: "acct-omp", expiresAt: nil)
+        XCTAssertEqual(
+            CodexProvider.liveCredentials(authJSON: Data("nope".utf8), omp: omp, now: now),
+            [CodexProvider.LiveCredential(accessToken: "tok-omp", accountId: "acct-omp")]
+        )
+    }
+
+    func testIdenticalCredentialsDeduplicated() {
+        let omp = OmpOAuthCredential(accessToken: "tok-cli", accountId: "acct-cli", expiresAt: nil)
+        XCTAssertEqual(
+            CodexProvider.liveCredentials(authJSON: cliAuthJSON, omp: omp, now: now).count,
+            1
+        )
+    }
+
     func testLiveUsageMapsStringCreditBalance() throws {
         let usage = try decoder.decode(CodexProvider.WhamUsage.self, from: Data(#"""
         {

@@ -2,17 +2,24 @@ import Foundation
 
 /// Codex/ChatGPT rate limits.
 ///
-/// Live-first: reads the ChatGPT OAuth token Codex CLI stores in
-/// ~/.codex/auth.json (read-only — tokmon never refreshes or writes it)
-/// and queries the same usage endpoint Codex's own /status uses
+/// Live-first: queries the same usage endpoint Codex's own /status uses
 /// (endpoint + headers verified against the open codex-rs source,
-/// backend-client/src/client/rate_limit_resets.rs).
+/// backend-client/src/client/rate_limit_resets.rs), authenticated with
+/// the first working credential from an ordered list: the ChatGPT OAuth
+/// token Codex CLI stores in ~/.codex/auth.json, then oh-my-pi's stored
+/// token for the same account (fallback for when the CLI token expires
+/// unused because work happens in omp). Read-only — tokmon never
+/// refreshes or writes either token.
 ///
 /// Falls back to the rate_limits snapshots Codex CLI persists in its
-/// session files (~/.codex/sessions/**/rollout-*.jsonl) when the live
-/// call fails (expired token, offline, endpoint change). File data is
-/// as of the last Codex turn; its snapshot keeps the event's own
+/// session files (~/.codex/sessions/**/rollout-*.jsonl) when every live
+/// candidate fails (expired tokens, offline, endpoint change). File data
+/// is as of the last Codex CLI turn; its snapshot keeps the event's own
 /// timestamp so the staleness label stays honest.
+///
+/// Known limitation: nothing enforces that omp is signed into the same
+/// ChatGPT account as Codex CLI. If it isn't, a fallback fetch reports
+/// the omp account's usage under this gauge.
 struct CodexProvider: UsageProvider {
     let id = "codex"
     let descriptor = ProviderDescriptor(displayName: "Codex", systemImage: "chevron.left.forwardslash.chevron.right", menuBarGlyph: "X")
@@ -26,11 +33,20 @@ struct CodexProvider: UsageProvider {
     }
 
     func fetchSnapshot() async throws -> ProviderSnapshot {
-        if let live = try? await fetchLive() {
-            return live
+        // Any live failure advances to the next candidate; expiry-checked
+        // tokens can still be revoked. At most two requests per poll, and
+        // only on the failure path.
+        for credential in Self.liveCredentials(
+            authJSON: try? Data(contentsOf: Self.codexDirectory.appendingPathComponent("auth.json")),
+            omp: OmpCredentialStore.credential(provider: "openai-codex"),
+            now: Date()
+        ) {
+            if let live = try? await fetchLive(credential: credential) {
+                return live
+            }
         }
         guard let event = Self.latestRateLimitEvent() else {
-            throw ProviderError.authRequired(hint: "Sign in to Codex (codex login)")
+            throw ProviderError.authRequired(hint: "Sign in to Codex (codex login) or omp")
         }
         return ProviderSnapshot(
             providerID: id,
@@ -48,6 +64,43 @@ struct CodexProvider: UsageProvider {
             let accountId: String?
         }
         let tokens: Tokens?
+    }
+
+    struct LiveCredential: Equatable {
+        let accessToken: String
+        let accountId: String
+    }
+
+    /// Pure candidate assembly: Codex CLI's auth.json first (existing
+    /// behavior preserved; it carries no expiry field, so present means
+    /// candidate), omp second when unexpired and carrying the account id
+    /// the ChatGPT-Account-Id header requires.
+    static func liveCredentials(
+        authJSON: Data?,
+        omp: OmpOAuthCredential?,
+        now: Date
+    ) -> [LiveCredential] {
+        var candidates: [LiveCredential] = []
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        if let authJSON,
+           let auth = try? decoder.decode(CodexAuth.self, from: authJSON),
+           let token = auth.tokens?.accessToken,
+           let account = auth.tokens?.accountId {
+            candidates.append(LiveCredential(accessToken: token, accountId: account))
+        }
+
+        if let omp,
+           !omp.isExpired(now: now),
+           let account = omp.accountId {
+            let candidate = LiveCredential(accessToken: omp.accessToken, accountId: account)
+            if !candidates.contains(candidate) {
+                candidates.append(candidate)
+            }
+        }
+
+        return candidates
     }
 
     struct WhamUsage: Decodable {
@@ -92,18 +145,10 @@ struct CodexProvider: UsageProvider {
         }
     }
 
-    private func fetchLive() async throws -> ProviderSnapshot {
-        let authURL = Self.codexDirectory.appendingPathComponent("auth.json")
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let auth = try decoder.decode(CodexAuth.self, from: Data(contentsOf: authURL))
-        guard let token = auth.tokens?.accessToken, let account = auth.tokens?.accountId else {
-            throw ProviderError.authRequired(hint: "Sign in to Codex (codex login)")
-        }
-
+    private func fetchLive(credential: LiveCredential) async throws -> ProviderSnapshot {
         var request = URLRequest(url: Self.usageURL)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue(account, forHTTPHeaderField: "ChatGPT-Account-Id")
+        request.setValue("Bearer \(credential.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(credential.accountId, forHTTPHeaderField: "ChatGPT-Account-Id")
         request.setValue("tokmon/0.1.0 (github.com/obrien-matthew/tokmon)", forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -111,6 +156,8 @@ struct CodexProvider: UsageProvider {
             throw URLError(.badServerResponse)
         }
 
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
         let usage = try decoder.decode(WhamUsage.self, from: data)
         let metrics = Self.metrics(from: usage)
         guard !metrics.isEmpty else {
