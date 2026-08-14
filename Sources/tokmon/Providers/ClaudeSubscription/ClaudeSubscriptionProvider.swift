@@ -1,12 +1,19 @@
 import Foundation
 
-/// Claude subscription limits (5h session, weekly) via Claude Code's OAuth
-/// credentials and the same usage endpoint the /usage command reads.
+/// Claude subscription limits (5h session, weekly) via the same usage
+/// endpoint the /usage command reads, authenticated with the first working
+/// credential from an ordered list: Claude Code's Keychain OAuth token,
+/// then oh-my-pi's stored token for the same account (fallback for when
+/// Claude Code's token expires unused because work happens in omp).
 ///
 /// tokmon never refreshes or writes tokens — refresh-token rotation would
-/// invalidate Claude Code's copy. An expired token surfaces as authRequired
-/// with cached gauges retained; that is a normal state between Claude Code
-/// sessions, not an error.
+/// invalidate the owning harness's copy. All candidates expired surfaces as
+/// authRequired with cached gauges retained; that is a normal state between
+/// coding sessions, not an error.
+///
+/// Known limitation: nothing enforces that omp is signed into the same
+/// account as Claude Code. If it isn't, a fallback fetch reports the omp
+/// account's usage under this gauge.
 struct ClaudeSubscriptionProvider: UsageProvider {
     let id = "claude-subscription"
     let descriptor = ProviderDescriptor(displayName: "Claude", systemImage: "asterisk.circle", menuBarGlyph: "C")
@@ -16,41 +23,56 @@ struct ClaudeSubscriptionProvider: UsageProvider {
 
     private static let keychainService = "Claude Code-credentials"
     private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    private static let signInHint = "Open Claude Code to sign in"
+    private static let signInHint = "Open Claude Code or omp to sign in"
+    private static let refreshHint = "Open Claude Code or omp to refresh login"
 
     func fetchSnapshot() async throws -> ProviderSnapshot {
-        let token = try loadAccessToken()
-        var request = URLRequest(url: Self.usageURL)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-        switch http.statusCode {
-        case 200:
-            break
-        case 401, 403:
-            throw ProviderError.authRequired(hint: Self.signInHint)
-        default:
-            throw URLError(.badServerResponse, userInfo: [
-                NSLocalizedDescriptionKey: "Usage endpoint returned HTTP \(http.statusCode)"
-            ])
-        }
-
-        let usage = try Self.makeDecoder().decode(OAuthUsage.self, from: data)
-        return ProviderSnapshot(
-            providerID: id,
-            fetchedAt: Date(),
-            status: .ok,
-            metrics: Self.metrics(from: usage)
+        let resolution = Self.resolveTokens(
+            keychainJSON: try? SecurityCLI.findGenericPassword(service: Self.keychainService),
+            omp: OmpCredentialStore.credential(provider: "anthropic"),
+            now: Date()
         )
+        guard !resolution.tokens.isEmpty else {
+            throw ProviderError.authRequired(hint: resolution.anyExpired ? Self.refreshHint : Self.signInHint)
+        }
+
+        // A 401/403 with one candidate advances to the next (expiry-checked
+        // tokens can still be revoked). At most two requests per poll, and
+        // only on that path — the cadence stays polite.
+        for token in resolution.tokens {
+            var request = URLRequest(url: Self.usageURL)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw URLError(.badServerResponse)
+            }
+            switch http.statusCode {
+            case 200:
+                let usage = try Self.makeDecoder().decode(OAuthUsage.self, from: data)
+                return ProviderSnapshot(
+                    providerID: id,
+                    fetchedAt: Date(),
+                    status: .ok,
+                    metrics: Self.metrics(from: usage)
+                )
+            case 401, 403:
+                continue
+            default:
+                throw URLError(.badServerResponse, userInfo: [
+                    NSLocalizedDescriptionKey: "Usage endpoint returned HTTP \(http.statusCode)"
+                ])
+            }
+        }
+        // Every candidate passed the expiry check yet was rejected — the
+        // tokens exist but are no longer valid, so "refresh" is the hint.
+        throw ProviderError.authRequired(hint: Self.refreshHint)
     }
 
     // MARK: - Credentials
 
-    private struct Credentials: Decodable {
+    struct Credentials: Decodable {
         struct OAuth: Decodable {
             let accessToken: String
             let expiresAt: Double?  // milliseconds since epoch
@@ -58,23 +80,43 @@ struct ClaudeSubscriptionProvider: UsageProvider {
         let claudeAiOauth: OAuth
     }
 
-    private func loadAccessToken() throws -> String {
-        let json: String
-        do {
-            json = try SecurityCLI.findGenericPassword(service: Self.keychainService)
-        } catch {
-            throw ProviderError.authRequired(hint: Self.signInHint)
+    struct TokenResolution: Equatable {
+        var tokens: [String]
+        var anyExpired: Bool
+    }
+
+    /// Pure candidate assembly: Claude Code's Keychain credential first
+    /// (existing behavior preserved), omp second. Expired or undecodable
+    /// candidates are skipped; `anyExpired` records whether a credential
+    /// existed but was stale, which selects the "refresh" hint over the
+    /// "sign in" one.
+    static func resolveTokens(
+        keychainJSON: String?,
+        omp: OmpOAuthCredential?,
+        now: Date
+    ) -> TokenResolution {
+        var resolution = TokenResolution(tokens: [], anyExpired: false)
+
+        if let json = keychainJSON,
+           let data = json.data(using: .utf8),
+           let credentials = try? JSONDecoder().decode(Credentials.self, from: data) {
+            if let expiresAt = credentials.claudeAiOauth.expiresAt,
+               expiresAt / 1000 < now.timeIntervalSince1970 {
+                resolution.anyExpired = true
+            } else {
+                resolution.tokens.append(credentials.claudeAiOauth.accessToken)
+            }
         }
-        guard let data = json.data(using: .utf8),
-              let credentials = try? JSONDecoder().decode(Credentials.self, from: data)
-        else {
-            throw ProviderError.authRequired(hint: Self.signInHint)
+
+        if let omp {
+            if omp.isExpired(now: now) {
+                resolution.anyExpired = true
+            } else if !resolution.tokens.contains(omp.accessToken) {
+                resolution.tokens.append(omp.accessToken)
+            }
         }
-        if let expiresAt = credentials.claudeAiOauth.expiresAt,
-           expiresAt / 1000 < Date().timeIntervalSince1970 {
-            throw ProviderError.authRequired(hint: "Open Claude Code to refresh login")
-        }
-        return credentials.claudeAiOauth.accessToken
+
+        return resolution
     }
 
     // MARK: - Response mapping

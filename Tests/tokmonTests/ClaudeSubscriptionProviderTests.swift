@@ -29,4 +29,72 @@ final class ClaudeSubscriptionProviderTests: XCTestCase {
         XCTAssertNil(metric.limit)
         XCTAssertEqual(MetricGaugeRow.valueText(for: metric), "$12.34")
     }
+
+    // MARK: - Credential candidate resolution
+
+    private let now = Date(timeIntervalSince1970: 1_786_710_000)
+
+    private func keychainJSON(token: String = "sk-keychain", expiresAtMS: Double?) -> String {
+        let expiry = expiresAtMS.map { ",\"expiresAt\":\($0)" } ?? ""
+        return #"{"claudeAiOauth":{"accessToken":"\#(token)"\#(expiry)}}"#
+    }
+
+    private func ompCredential(token: String = "sk-omp", expiresAt: Date?) -> OmpOAuthCredential {
+        OmpOAuthCredential(accessToken: token, accountId: "acct", expiresAt: expiresAt)
+    }
+
+    func testKeychainFirstThenOmp() {
+        let resolution = ClaudeSubscriptionProvider.resolveTokens(
+            keychainJSON: keychainJSON(expiresAtMS: (now.timeIntervalSince1970 + 3600) * 1000),
+            omp: ompCredential(expiresAt: now.addingTimeInterval(3600)),
+            now: now
+        )
+        XCTAssertEqual(resolution.tokens, ["sk-keychain", "sk-omp"])
+        XCTAssertFalse(resolution.anyExpired)
+    }
+
+    func testExpiredKeychainFallsBackToOmp() {
+        let resolution = ClaudeSubscriptionProvider.resolveTokens(
+            keychainJSON: keychainJSON(expiresAtMS: (now.timeIntervalSince1970 - 60) * 1000),
+            omp: ompCredential(expiresAt: now.addingTimeInterval(3600)),
+            now: now
+        )
+        XCTAssertEqual(resolution.tokens, ["sk-omp"])
+        XCTAssertTrue(resolution.anyExpired)
+    }
+
+    func testAllExpiredSelectsRefreshHintState() {
+        let resolution = ClaudeSubscriptionProvider.resolveTokens(
+            keychainJSON: keychainJSON(expiresAtMS: (now.timeIntervalSince1970 - 60) * 1000),
+            omp: ompCredential(expiresAt: now.addingTimeInterval(-60)),
+            now: now
+        )
+        XCTAssertTrue(resolution.tokens.isEmpty)
+        XCTAssertTrue(resolution.anyExpired)
+    }
+
+    func testNoCredentialsAnywhere() {
+        let resolution = ClaudeSubscriptionProvider.resolveTokens(keychainJSON: nil, omp: nil, now: now)
+        XCTAssertTrue(resolution.tokens.isEmpty)
+        XCTAssertFalse(resolution.anyExpired)
+    }
+
+    func testUndecodableKeychainSkippedWithoutExpiredFlag() {
+        let resolution = ClaudeSubscriptionProvider.resolveTokens(
+            keychainJSON: "not json",
+            omp: ompCredential(expiresAt: nil),
+            now: now
+        )
+        XCTAssertEqual(resolution.tokens, ["sk-omp"])
+        XCTAssertFalse(resolution.anyExpired)
+    }
+
+    func testIdenticalTokensDeduplicated() {
+        let resolution = ClaudeSubscriptionProvider.resolveTokens(
+            keychainJSON: keychainJSON(token: "sk-same", expiresAtMS: nil),
+            omp: ompCredential(token: "sk-same", expiresAt: nil),
+            now: now
+        )
+        XCTAssertEqual(resolution.tokens, ["sk-same"])
+    }
 }
