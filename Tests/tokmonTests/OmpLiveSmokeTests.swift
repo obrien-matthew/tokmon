@@ -57,4 +57,27 @@ final class OmpLiveSmokeTests: XCTestCase {
         let usage = try decoder.decode(CodexProvider.WhamUsage.self, from: data)
         XCTAssertFalse(CodexProvider.metrics(from: usage).isEmpty)
     }
+
+    /// End-to-end: omp-sourced API key, both live endpoints, real
+    /// mapping. Asserts the gauge is present and bounded rather than a
+    /// specific balance, which moves between runs.
+    func testOpenRouterEndpointsAcceptOmpAPIKey() async throws {
+        try requireSmoke()
+        guard OpenRouterProvider.resolveKey() != nil else {
+            throw XCTSkip("No omp openrouter api_key on this machine")
+        }
+
+        let snapshot = try await OpenRouterProvider().fetchSnapshot()
+        XCTAssertEqual(snapshot.status, .ok)
+        XCTAssertFalse(snapshot.metrics.isEmpty)
+
+        let balance = try XCTUnwrap(snapshot.metrics.first { $0.id == "credits" })
+        XCTAssertNil(balance.limit, "lifetime totals must never produce a bar")
+
+        if let cap = snapshot.metrics.first(where: { $0.id == "key-cap" }) {
+            XCTAssertEqual(cap.unit, .usd)
+            XCTAssertGreaterThan(try XCTUnwrap(cap.limit), 0)
+            XCTAssertNotNil(cap.fraction)
+        }
+    }
 }

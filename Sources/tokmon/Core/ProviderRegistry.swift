@@ -6,6 +6,7 @@ enum ProviderRegistry {
         [
             ClaudeSubscriptionProvider(),
             CodexProvider(),
+            OpenRouterProvider(),
             MockProvider(),
             MockDegradingProvider(),
         ]
