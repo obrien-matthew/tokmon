@@ -77,18 +77,18 @@ failing degrades to the other rather than blanking the provider.
 
 ### Phase 1 — Credential source
 
-- [ ] `OmpCredentialStore.apiKey(provider:databaseURL:)`: same read-only
+- [x] `OmpCredentialStore.apiKey(provider:databaseURL:)`: same read-only
   SQLite posture and failure-to-nil discipline, `credential_type =
   'api_key'`, decoding `{"key":…}`. Shares the query with the existing
   oauth reader via a private `rowData` helper; neither reader may return
   the other's rows.
-- [ ] `OpenRouterProvider` resolves its key: omp store first, then a
+- [x] `OpenRouterProvider` resolves its key: omp store first, then a
   Keychain generic password (`service: "tokmon-openrouter"`) via the
   existing `SecurityCLI.findGenericPassword`, used with `try?` as
   `ClaudeSubscriptionProvider` does. No env-var tier — a
   Finder/launchd-launched GUI app inherits no shell environment, so
   `OPENROUTER_API_KEY` would silently work only under `swift run`.
-- [ ] Tests, extending `OmpCredentialStoreTests`' real WAL fixture DB
+- [x] Tests, extending `OmpCredentialStoreTests`' real WAL fixture DB
   with a `credentialType` field: valid api_key row, the two readers not
   crossing over, disabled row ignored, malformed/empty payload, missing
   file. Fixture JSON uses ordinary escaped literals — inside a `#"…"#`
@@ -97,16 +97,16 @@ failing degrades to the other rather than blanking the provider.
 
 ### Phase 2 — Provider
 
-- [ ] `Sources/tokmon/Providers/OpenRouter/OpenRouterProvider.swift`:
+- [x] `Sources/tokmon/Providers/OpenRouter/OpenRouterProvider.swift`:
   `id = "openrouter"`, glyph `"O"` (unused while dropdown-only, but the
   descriptor requires one), `refreshInterval = 300`,
   `enabledByDefault = false` — it needs a key most users don't have, and
   defaulting it on would show them an auth hint for an account they
   don't own.
-- [ ] Pure `static func metrics(credits:key:)` over already-decoded
+- [x] Pure `static func metrics(credits:key:)` over already-decoded
   payloads, so the whole display mapping is testable without network;
   the provider does I/O only.
-- [ ] Status resolution, decided up front: no key resolved → throw
+- [x] Status resolution, decided up front: no key resolved → throw
   `authRequired(hint:)` with **no** network call; both calls fail and
   either returned 401 → `authRequired`; both fail otherwise → rethrow
   the first error (RefreshEngine maps it to `.error` and republishes
@@ -114,10 +114,10 @@ failing degrades to the other rather than blanking the provider.
   Mirrors `CodexProvider.fetchLive`'s `guard !metrics.isEmpty`.
   The per-request `Outcome` type must default its optional fields so
   the partial initializers used on the failure paths compile.
-- [ ] Register in `ProviderRegistry.allProviders()` after Codex. No
+- [x] Register in `ProviderRegistry.allProviders()` after Codex. No
   signature change: with no configurable maximum, nothing needs to be
   injected, so `SettingsView.rows`' parameterless call still works.
-- [ ] Tests — pure-function cases only, since the suite has no
+- [x] Tests — pure-function cases only, since the suite has no
   `URLProtocol` stub and this plan does not add one: cap arithmetic at
   the probed numbers (25/25, 100%), partially-used cap, uncapped key
   omitted, `limit_reset` null and unknown-string labels, balance as an
@@ -128,22 +128,22 @@ failing degrades to the other rather than blanking the provider.
 
 ### Phase 3 — Docs and verification
 
-- [ ] `MetricKind`: one-line doc comments distinguishing `.spend` from
+- [x] `MetricKind`: one-line doc comments distinguishing `.spend` from
   `.quota` and noting that only `.rateLimitWindow` reaches the menu bar
   — the distinction is load-bearing (AppState.swift:56) and currently
   undocumented.
-- [ ] README: provider bullet (both endpoints, credential order, the
+- [x] README: provider bullet (both endpoints, credential order, the
   Keychain command for non-omp users, why the gauge is the key cap and
   the balance is text), architecture tree gains the provider directory.
   No glyph-legend change — OpenRouter is dropdown-only. Leave the
   "OpenAI API spend provider" future idea in place; OpenRouter is a
   different vendor and API and does not supersede it.
-- [ ] `docs/guides/openrouter-data-sources.md`, matching the existing
+- [x] `docs/guides/openrouter-data-sources.md`, matching the existing
   `codex-data-sources.md` convention.
-- [ ] Verify: `swift test`; then build, install, and confirm against the
+- [x] Verify: `swift test`; then build, install, and confirm against the
   live account that the dropdown shows a red 100% `Key spend (monthly)`
   bar and a `Balance $5.44` text row. Screenshot.
-- [ ] Move plan to `docs/plans/completed/`.
+- [x] Move plan to `docs/plans/completed/`.
 
 Commit after each phase.
 
