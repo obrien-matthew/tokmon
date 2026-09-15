@@ -1,31 +1,32 @@
 # OpenRouter credits provider
 
-Status: awaiting implementation approval (scope settled 2026-09-15;
-revised after dual adversarial review — fable-reviewer and
-sol-reviewer both rejected the first draft's max design)
+Status: approved 2026-09-15. Scope simplified by the user after review:
+the gauge is the key's own spend cap (`limit − limit_remaining`), a real
+API-supplied meter, so the configurable maximum and its entire settings
+phase are dropped.
 
 ## Problem
 
 tokmon covers Claude subscription and Codex. OpenRouter is the third
 account the user spends on (omp's estimator and gateway routes run
-through it), and its balance is a prepaid pool, not a metered window:
-the API reports dollars purchased and dollars spent, with no rate-limit
-percentage and no reset time. `MetricGaugeRow` draws a bar only when
-`UsageMetric.limit != nil`, so a balance lands in the open-ended
-counter path (text, no bar) unless a denominator is supplied.
+through it). Its prepaid balance has no denominator — the API reports
+lifetime dollars purchased and spent, so `MetricGaugeRow` would render
+it as a bare counter (`limit == nil` → no bar).
 
-Hence the ask: an OpenRouter provider **plus** a configurable pool size
-so the gauge bar has a denominator.
+The original ask was a user-configured maximum to supply that
+denominator. Rejected in favour of the simpler, honest alternative: the
+`/api/v1/key` endpoint already reports a real enforced meter for keys
+that carry a spend cap. That becomes the gauge; the account balance
+rides along as an open-ended text row.
 
-## User decisions (2026-09-15)
+## User decisions
 
-1. **Menu bar**: dropdown only. OpenRouter never occupies a menu-bar
-   title slot; `AppState.menuBarRows` and `SettingsView.metricOptions`
-   keep their `kind == .rateLimitWindow` filter. Phase 4 of the review
-   draft is dropped entirely.
-2. **Key spend cap**: ship it as a second metric.
-3. **Pool size**: manual — the user tops up a fixed amount, so the bar
-   denominator is a number they enter. No lifetime-derived auto mode.
+1. **Menu bar**: dropdown only. `AppState.menuBarRows` and
+   `SettingsView.metricOptions` keep their `kind == .rateLimitWindow`
+   filter — no eligibility change, no competition for the two 22pt rows.
+2. **Gauge**: the key spend cap, `used = limit − limit_remaining`.
+3. **No configurable maximum, no settings at all.** The account balance
+   is an open-ended counter, exactly like Codex's credits line.
 4. **Low-balance notification**: out of scope.
 
 ## Verified API facts (live probe, 2026-09-15, user's omp key)
@@ -37,74 +38,40 @@ decodes today).
 
 - `GET /api/v1/credits` → `200`
   `{"data":{"total_credits":60,"total_usage":54.561828163}}`
-  → remaining **$5.44**. Both figures are lifetime, not windowed.
-  Docs say a management key is required; the user's plain inference key
-  returned 200, so the path works today but may tighten → treat `403`
-  as a soft failure, not an auth error.
+  → balance **$5.44**. Both figures are lifetime cumulative. The docs
+  say this route wants a management key; the user's plain inference key
+  is accepted today, so a 403 is a soft failure, not an auth error.
 - `GET /api/v1/key` → `200` `{"limit":25,"limit_reset":"monthly",
   "limit_remaining":0,"usage":35.010634427,"usage_monthly":25.006061894,
   "is_free_tier":false,"is_management_key":false,"expires_at":null,…}`
-  → **this key is currently capped out**: a $25/month spend cap with
-  `limit_remaining: 0`. Calls through it fail until the cap resets or
-  is raised, which also means the $5.44 balance is not spendable
-  through this key right now.
+  → **the key is currently capped out**: $25/month, nothing remaining.
+  Calls through it fail until the cap resets, which is exactly why a
+  $5.44 balance alone would be a misleading gauge.
 
-## Design decisions
+## Design
 
-### One credits metric, no fabricated numerator
+Two metrics, no configuration:
 
-First draft emitted `used = max − remaining` labelled "Credits
-remaining" and promised the text `$5.44 left of $60`. Both reviewers
-killed it: `MetricGaugeRow.valueText` renders bounded `.usd` as
-`used / limit` (MetricGaugeRow.swift:49-54), so the row would have read
-`Credits remaining — $54.56 / $60.00`, and changing that branch would
-break Claude's `extra-credits` row.
+1. **`key-cap`** — `kind: .spend`, `unit: .usd`,
+   `used = min(max(limit − limit_remaining, 0), limit)`, `limit = limit`.
+   Emitted only when the key carries a cap (`limit` non-null). Uses the
+   API's own arithmetic rather than a `usage_*` field: the two disagree
+   by rounding (`usage_monthly` 25.006 against a 25 cap would render the
+   self-inconsistent `$25.01 / $25.00`), and only the difference is what
+   OpenRouter enforces. Label derives from `limit_reset`:
+   `"Key spend (monthly)"`, `"Key spend (lifetime)"` when null,
+   `"Key spend (<raw>)"` for anything else. **No `resetsAt`**:
+   `limit_reset` names a cadence, not a boundary, and nothing says
+   whether it is calendar- or key-anniversary-based, so a countdown
+   would be invented.
+2. **`credits`** — `kind: .spend`, `unit: .usd`, `used = balance`,
+   `limit: nil`, label `"Balance"` → renders `$5.44`, no bar. Same shape
+   as `CodexProvider`'s `credits-remaining`. This is what keeps the
+   provider useful when the key is uncapped (`limit: null` → no gauge)
+   and covers account-wide spend the per-key meter cannot see.
 
-Revised — `id: "credits"`, `kind: .spend`, `unit: .usd` (`.spend`
-matches Claude's dollar-denominated extra-credits precedent):
-
-- **No pool configured (default)**: `used = remaining`, `limit = nil`,
-  `label: "Balance"` → renders `$5.44`, no bar. Same shape as Codex's
-  existing `credits-remaining`.
-- **Pool configured (`$P`)**: `used = min(max(P − remaining, 0), P)`,
-  `limit = P`, `label: "Balance ($5.44 left)"` → renders
-  `$14.56 / $20.00` with a 72.8% bar. `used` is clamped, not just
-  `fraction`, so a top-up above the pool size reads `$0.00 / $20.00`
-  (full tank) instead of a negative dollar string. Remaining stays
-  visible in the provider-owned label (free text; precedent: Claude's
-  model-scoped labels), so the denominator hides nothing.
-
-Fill is depletion-ward in both cases, so the shared orange-70/red-90
-escalation means "running low", consistent with every other gauge.
-
-### Why not auto-derive the pool from `total_credits`
-
-Rejected on review: both API figures are lifetime cumulative, so
-`1 − remaining / lifetime_purchases` drifts monotonically toward red as
-the account ages ($50 left of $100 lifetime = 50%; the same $50 left of
-$600 lifetime = 92%). It converges on permanent red and devalues the
-escalation colors on the Claude and Codex rows where they are
-actionable. The user confirmed a fixed top-up amount, so the pool is
-entered once and edited when it changes. `UsageMetric.fraction` already
-guards `limit > 0` (Model.swift:41), so an empty field or `0` naturally
-means "no bar" — no enum, no third mode, just `Double?`.
-
-### The pool applies immediately, not on relaunch
-
-Providers are constructed once in `TokmonApp.init` (TokmonApp.swift:23-36)
-and held as immutable arrays by `AppState` and `RefreshEngine`, so a
-value captured at construction would need a relaunch — and after
-relaunch `SnapshotCache.load()` republishes metrics with the *old*
-denominator baked in, so the user would see the stale bar until the next
-poll and conclude the setting is broken.
-
-Instead `OpenRouterProvider` takes `let pool: @Sendable () -> Double?`,
-read inside `fetchSnapshot`. `ProviderRegistry.allProviders()` keeps its
-parameterless signature (SettingsView.rows calls it,
-SettingsView.swift:21-24); the closure is injected in `TokmonApp`,
-reading `settingsStore.settings.openRouterCreditPool`. Opening the menu
-triggers the existing debounced refresh, so the new bar appears without
-relaunch and the Settings caption stays true as written.
+Both endpoints are fetched concurrently and independently: either one
+failing degrades to the other rather than blanking the provider.
 
 ## Phases
 
@@ -112,112 +79,91 @@ relaunch and the Settings caption stays true as written.
 
 - [ ] `OmpCredentialStore.apiKey(provider:databaseURL:)`: same read-only
   SQLite posture and failure-to-nil discipline, `credential_type =
-  'api_key'`, decoding `{"key":…}`. Existing oauth `credential(provider:)`
-  untouched.
+  'api_key'`, decoding `{"key":…}`. Shares the query with the existing
+  oauth reader via a private `rowData` helper; neither reader may return
+  the other's rows.
 - [ ] `OpenRouterProvider` resolves its key: omp store first, then a
   Keychain generic password (`service: "tokmon-openrouter"`) via the
   existing `SecurityCLI.findGenericPassword`, used with `try?` as
   `ClaudeSubscriptionProvider` does. No env-var tier — a
-  Finder/launchd-launched GUI app inherits no shell environment, so it
-  would only ever work under `swift run`.
-- [ ] Tests, mirroring `OmpCredentialStoreTests`' real WAL fixture DB:
-  valid api_key row, oauth row not returned by `apiKey`, api_key row not
-  returned by `credential`, malformed JSON, missing file.
+  Finder/launchd-launched GUI app inherits no shell environment, so
+  `OPENROUTER_API_KEY` would silently work only under `swift run`.
+- [ ] Tests, extending `OmpCredentialStoreTests`' real WAL fixture DB
+  with a `credentialType` field: valid api_key row, the two readers not
+  crossing over, disabled row ignored, malformed/empty payload, missing
+  file. Fixture JSON uses ordinary escaped literals — inside a `#"…"#`
+  raw string a `\"` is a literal backslash and would produce invalid
+  JSON that silently fails to decode.
 
 ### Phase 2 — Provider
 
 - [ ] `Sources/tokmon/Providers/OpenRouter/OpenRouterProvider.swift`:
-  `id = "openrouter"`, glyph `"O"`, `refreshInterval = 300`,
-  `enabledByDefault = false` (it needs a key; defaulting it on would
-  show an auth hint to every other user).
-- [ ] Pure `static func metrics(credits:key:pool:)` over already-decoded
-  payloads; the provider does I/O only. Both endpoints are fetched
-  independently — either failing degrades to the other.
-- [ ] Credits metric per the design above.
-- [ ] Key-cap metric: `used = max(0, limit − limit_remaining)` (the
-  API's own arithmetic; `25 − 0 = 25`, whereas the draft's
-  `usage_monthly = 25.006` would render the self-inconsistent
-  `$25.01 / $25.00`), `limit = limit`, emitted only when `limit` is
-  non-null, label derived from `limit_reset` (`"Key spend (monthly)"`,
-  `"Key spend (lifetime)"` when null, `"Key spend (<raw>)"` for an
-  unknown value). No `resetsAt`: `limit_reset` does not say whether the
-  boundary is calendar or key-anniversary, and inventing a countdown
-  would be a lie.
+  `id = "openrouter"`, glyph `"O"` (unused while dropdown-only, but the
+  descriptor requires one), `refreshInterval = 300`,
+  `enabledByDefault = false` — it needs a key most users don't have, and
+  defaulting it on would show them an auth hint for an account they
+  don't own.
+- [ ] Pure `static func metrics(credits:key:)` over already-decoded
+  payloads, so the whole display mapping is testable without network;
+  the provider does I/O only.
 - [ ] Status resolution, decided up front: no key resolved → throw
-  `authRequired` with **no** network call; both calls fail and either
-  returned 401 → `authRequired`; both fail otherwise → rethrow the
-  first error (RefreshEngine maps it to `.error` and republishes cached
-  metrics); at least one succeeds → `.ok` with what survived. Mirrors
-  `CodexProvider.fetchLive`'s `guard !metrics.isEmpty`.
+  `authRequired(hint:)` with **no** network call; both calls fail and
+  either returned 401 → `authRequired`; both fail otherwise → rethrow
+  the first error (RefreshEngine maps it to `.error` and republishes
+  cached metrics); at least one succeeds → `.ok` with what survived.
+  Mirrors `CodexProvider.fetchLive`'s `guard !metrics.isEmpty`.
+  The per-request `Outcome` type must default its optional fields so
+  the partial initializers used on the failure paths compile.
+- [ ] Register in `ProviderRegistry.allProviders()` after Codex. No
+  signature change: with no configurable maximum, nothing needs to be
+  injected, so `SettingsView.rows`' parameterless call still works.
 - [ ] Tests — pure-function cases only, since the suite has no
-  `URLProtocol` stub and this plan does not add one: no-pool shape,
-  pool fraction (72.8% at the probed numbers), pool clamp when
-  `remaining > pool`, overdrawn pool, `total_credits == 0` free-tier
-  account, credits payload absent → key metric alone, both absent →
-  empty, key `limit == null` → omitted, `limit_reset` null and
-  unknown-string labels. Assert `MetricGaugeRow.valueText` on the
-  emitted metrics so rendered strings are pinned, not just numbers.
-- [ ] Register in `ProviderRegistry.allProviders()` after Codex.
+  `URLProtocol` stub and this plan does not add one: cap arithmetic at
+  the probed numbers (25/25, 100%), partially-used cap, uncapped key
+  omitted, `limit_reset` null and unknown-string labels, balance as an
+  open-ended counter, zero-balance account, overdrawn account, each
+  endpoint supplying metrics alone, both absent → empty. Assert
+  `MetricGaugeRow.valueText` on the emitted metrics so rendered strings
+  are pinned, not just the numbers.
 
-### Phase 3 — Settings
+### Phase 3 — Docs and verification
 
-- [ ] `AppSettings`: `var openRouterCreditPool: Double?` via the
-  existing `decodeIfPresent` pattern (old settings.json decodes to
-  `nil`; no custom enum coding).
-- [ ] `SettingsStore.setOpenRouterCreditPool(_:)` — rejects non-finite
-  and non-positive values by storing `nil`.
-- [ ] `SettingsView`: an "OpenRouter" section with one dollar
-  `TextField` bound to local `@State` text, committed on `.onSubmit`
-  and focus loss (**not** per keystroke — `SettingsStore.settings` has
-  `didSet { save() }`, so a direct binding would rewrite settings.json
-  on every character and transiently store `2` while typing `20`).
-  Currency-tolerant parsing so `"$20"` works; empty/0/negative/
-  unparseable → `nil` → no bar. Section visible only when the provider
-  is enabled.
-- [ ] Wire the closure in `TokmonApp` where providers are built.
-- [ ] Tests: `AppSettings` round-trip with the pool set and unset, and
-  decode of a pre-feature settings.json.
-
-### Phase 4 — Docs and verification
-
-- [ ] README: provider bullet (both endpoints, credential order, the
-  Keychain command, the pool setting and why it has no auto mode),
-  architecture tree gains the provider directory. Leave the "OpenAI API
-  spend provider" future idea in place — OpenRouter is a different
-  vendor and API, it does not supersede it. No glyph-legend change:
-  OpenRouter is dropdown-only by decision 1.
-- [ ] `docs/guides/openrouter-data-sources.md`, matching the existing
-  `codex-data-sources.md` convention: endpoints, the management-key
-  caveat on `/credits`, credential precedence, what each metric means.
 - [ ] `MetricKind`: one-line doc comments distinguishing `.spend` from
-  `.quota` — the distinction is load-bearing (AppState.swift:56) and
-  currently undocumented.
-- [ ] Verify: `swift test`; then build + install and confirm against the
-  live account — dropdown shows `Balance $5.44` with no bar by default;
-  entering a `$20` pool re-renders as `$14.56 / $20.00` at ~73% orange
-  **without relaunch**; key cap shows 100% red (currently exhausted).
-  Screenshot both states.
+  `.quota` and noting that only `.rateLimitWindow` reaches the menu bar
+  — the distinction is load-bearing (AppState.swift:56) and currently
+  undocumented.
+- [ ] README: provider bullet (both endpoints, credential order, the
+  Keychain command for non-omp users, why the gauge is the key cap and
+  the balance is text), architecture tree gains the provider directory.
+  No glyph-legend change — OpenRouter is dropdown-only. Leave the
+  "OpenAI API spend provider" future idea in place; OpenRouter is a
+  different vendor and API and does not supersede it.
+- [ ] `docs/guides/openrouter-data-sources.md`, matching the existing
+  `codex-data-sources.md` convention.
+- [ ] Verify: `swift test`; then build, install, and confirm against the
+  live account that the dropdown shows a red 100% `Key spend (monthly)`
+  bar and a `Balance $5.44` text row. Screenshot.
 - [ ] Move plan to `docs/plans/completed/`.
 
 Commit after each phase.
 
 ## Risks
 
-- **`/credits` permission drift**: docs say management key required; the
-  user's inference key works today. Mitigated by treating 403 as a soft
-  failure — the key-scoped metric survives alone and the gauge degrades
-  rather than blanking.
-- **Pool staleness**: a hand-entered pool does not follow top-ups, so
-  after a larger top-up the bar reads "full tank" until the user edits
-  it. Accepted: the alternative (lifetime denominators) is worse, and
-  the label always shows the true remaining balance.
-- **Two red bars**: with the key cap exhausted, both OpenRouter rows sit
-  at/near 100%. That is the account's actual state, not a rendering bug.
+- **`/credits` permission drift**: the docs say management key required;
+  the user's inference key works today. Mitigated by treating a failure
+  there as soft — the gauge survives without the balance row.
+- **Uncapped keys show no bar**: if the user raises or removes the $25
+  cap, the provider degrades to a single text row. Accepted: that is the
+  honest rendering of "no enforced limit exists", and it is why the
+  balance row ships alongside.
+- **Per-key blind spot**: the cap meter does not see spend through other
+  keys on the same account. The balance row covers account-wide truth.
 
 ## Non-goals
 
+- No configurable gauge maximum (superseded by the key-cap meter).
 - No per-model or per-app OpenRouter cost breakdown.
-- No credit top-up, alerting, or low-balance notification (decision 4).
-- No menu-bar title slot for OpenRouter (decision 1).
+- No credit top-up, alerting, or low-balance notification.
+- No menu-bar title slot for OpenRouter.
 - No writing of API keys by tokmon; read-only, like every other
   credential path in the app.

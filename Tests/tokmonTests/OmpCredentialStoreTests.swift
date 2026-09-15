@@ -22,6 +22,7 @@ final class OmpCredentialStoreTests: XCTestCase {
     private struct FixtureRow {
         let provider: String
         let data: String
+        var credentialType: String = "oauth"
         var disabled: String?
         var updatedAt: Int = 10
     }
@@ -54,7 +55,7 @@ final class OmpCredentialStoreTests: XCTestCase {
             let disabled = row.disabled.map { "'\($0)'" } ?? "NULL"
             try exec(database, """
             INSERT INTO auth_credentials (provider, credential_type, data, disabled_cause, updated_at)
-            VALUES ('\(row.provider)', 'oauth', '\(row.data)', \(disabled), \(row.updatedAt))
+            VALUES ('\(row.provider)', '\(row.credentialType)', '\(row.data)', \(disabled), \(row.updatedAt))
             """)
         }
     }
@@ -146,5 +147,54 @@ final class OmpCredentialStoreTests: XCTestCase {
         let absent = databaseURL.deletingLastPathComponent().appendingPathComponent("absent.db")
         XCTAssertNil(OmpCredentialStore.credential(provider: "anthropic", databaseURL: absent))
         XCTAssertFalse(FileManager.default.fileExists(atPath: absent.path), "read-only open must not create the file")
+    }
+
+    // MARK: - API keys
+
+    private func apiKeyPayload(key: String = "sk-or-v1-live") -> String {
+        "{\"key\":\"\(key)\",\"source\":\"env\"}"
+    }
+
+    func testReadsAPIKeyRow() throws {
+        try createDatabase(rows: [
+            FixtureRow(provider: "openrouter", data: apiKeyPayload(), credentialType: "api_key")
+        ])
+        XCTAssertEqual(
+            OmpCredentialStore.apiKey(provider: "openrouter", databaseURL: databaseURL),
+            "sk-or-v1-live"
+        )
+    }
+
+    /// credential_type, not payload shape, is what separates the readers.
+    func testReadersDoNotReturnEachOthersRows() throws {
+        try createDatabase(rows: [
+            FixtureRow(provider: "openrouter", data: payload(access: "sk-oauth")),
+            FixtureRow(provider: "anthropic", data: apiKeyPayload(), credentialType: "api_key"),
+        ])
+        XCTAssertNil(OmpCredentialStore.apiKey(provider: "openrouter", databaseURL: databaseURL))
+        XCTAssertNil(OmpCredentialStore.credential(provider: "anthropic", databaseURL: databaseURL))
+    }
+
+    func testDisabledAPIKeyRowIsIgnored() throws {
+        try createDatabase(rows: [
+            FixtureRow(
+                provider: "openrouter",
+                data: apiKeyPayload(),
+                credentialType: "api_key",
+                disabled: "revoked"
+            )
+        ])
+        XCTAssertNil(OmpCredentialStore.apiKey(provider: "openrouter", databaseURL: databaseURL))
+    }
+
+    func testMalformedOrEmptyAPIKeyReturnsNil() {
+        XCTAssertNil(OmpCredentialStore.decodeAPIKey(json: "not json"))
+        XCTAssertNil(OmpCredentialStore.decodeAPIKey(json: #"{"key":""}"#))
+        XCTAssertNil(OmpCredentialStore.decodeAPIKey(json: #"{"source":"env"}"#))
+    }
+
+    func testMissingFileReturnsNilForAPIKey() {
+        let absent = databaseURL.deletingLastPathComponent().appendingPathComponent("absent.db")
+        XCTAssertNil(OmpCredentialStore.apiKey(provider: "openrouter", databaseURL: absent))
     }
 }
