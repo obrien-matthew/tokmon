@@ -25,8 +25,10 @@ actor RefreshEngine {
         let id: String
         let generation: Int
     }
+    /// Live fetch tasks, so orphan bookkeeping is bounded by outstanding
+    /// work rather than accumulating one entry per poll forever.
+    private var pendingWork: Set<Key> = []
     private var orphaned: Set<Key> = []
-    private var finishedWork: Set<Key> = []
     private var orphans: [String: Int] = [:]
     private var lastAttempt: [String: Date] = [:]
     private var consecutiveFailures: [String: Int] = [:]
@@ -286,6 +288,7 @@ actor RefreshEngine {
         let id = provider.id
         let rendezvous = FirstResult()
 
+        pendingWork.insert(Key(id: id, generation: generation))
         let work = Task {
             do {
                 await rendezvous.finish(.success(try await provider.fetchSnapshot()))
@@ -310,11 +313,15 @@ actor RefreshEngine {
         return try result.get()
     }
 
-    /// The fetch outlived its deadline; its task is still running and may
-    /// never stop. Count it until it reports back.
+    /// The fetch outlived its deadline; its task may still be running and
+    /// may never stop. Count it until it reports back — unless it already
+    /// did, which is a real race: the work can finish just as the timer
+    /// wins the rendezvous, and counting a finished task as orphaned would
+    /// leak the counter and eventually trip the cap forever.
     private func markOrphaned(_ id: String, generation: Int) {
-        guard !finishedWork.contains(Key(id: id, generation: generation)) else { return }
-        orphaned.insert(Key(id: id, generation: generation))
+        let key = Key(id: id, generation: generation)
+        guard pendingWork.contains(key) else { return }
+        orphaned.insert(key)
         orphans[id, default: 0] += 1
         Diag.refresh.error("""
         orphan id=\(id, privacy: .public) created \
@@ -323,10 +330,12 @@ actor RefreshEngine {
     }
 
     /// Called by every fetch task when it finally completes, on time or
-    /// long after being abandoned.
+    /// long after being abandoned. Bookkeeping tracks only live work, so
+    /// it stays bounded by the number of outstanding fetches rather than
+    /// growing by one entry per poll for the life of the process.
     private func workFinished(_ id: String, generation: Int) {
         let key = Key(id: id, generation: generation)
-        finishedWork.insert(key)
+        pendingWork.remove(key)
         guard orphaned.remove(key) != nil else { return }
         orphans[id, default: 1] -= 1
         Diag.refresh.log("""
