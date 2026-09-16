@@ -53,6 +53,33 @@ final class RefreshEngineTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(attempts, 2)
     }
 
+    /// The polling loop awaits its own in-flight task, so the deadline
+    /// must be enforced inside the fetch — not only by the overdue-cancel
+    /// in `startRefresh`, which needs an external nudge (menu open, wake,
+    /// network restore) to fire. Here `start()` is the only trigger and
+    /// nothing else touches the engine.
+    func testPollingLoopIterationEndsWithoutAnExternalTrigger() async throws {
+        let provider = HangingProvider(id: "hang")
+        let collector = Collector()
+        let engine = RefreshEngine(
+            providers: [provider],
+            cache: SnapshotCache(directory: directory),
+            initial: [:],
+            fetchDeadline: 0.2,
+            publish: { await collector.append($0) }
+        )
+
+        await engine.start()
+        try await Task.sleep(for: .seconds(0.8))
+
+        let published = await collector.snapshots
+        XCTAssertFalse(
+            published.isEmpty,
+            "the loop must come back from a hung fetch on its own"
+        )
+        XCTAssertFalse(try XCTUnwrap(published.first).status.isOK)
+    }
+
     func testCachePersistsSuccessesToItsOwnDirectory() async throws {
         let provider = HangingProvider(id: "hang")
         await provider.release()
