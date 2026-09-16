@@ -86,7 +86,17 @@ actor RefreshEngine {
 
     private func startRefresh(_ provider: any UsageProvider, force: Bool) {
         let id = provider.id
-        guard inFlight[id] == nil else { return }
+        guard inFlight[id] == nil else {
+            // The smoking gun for a parked provider: every refresh path
+            // (loop, menu open, wake, network restore) is gated here, so
+            // a fetch that never returns silently freezes this provider.
+            let age = lastAttempt[id].map { Date().timeIntervalSince($0) } ?? -1
+            Diag.refresh.log("""
+            skip id=\(id, privacy: .public) reason=inflight \
+            inflightAge=\(String(format: "%.1f", age), privacy: .public)s
+            """)
+            return
+        }
         if !force, let last = lastAttempt[id],
            Date().timeIntervalSince(last) < Self.menuOpenDebounce {
             return
@@ -104,22 +114,42 @@ actor RefreshEngine {
 
     private func performFetch(_ provider: any UsageProvider) async {
         let id = provider.id
+        let started = Date()
+        let failures = consecutiveFailures[id] ?? 0
+        Diag.refresh.log("""
+        fetch id=\(id, privacy: .public) start \
+        priorFailures=\(failures, privacy: .public)
+        """)
         do {
             let snapshot = try await provider.fetchSnapshot()
             // Drop results older than what we already published.
             if let previous = lastGood[id], previous.fetchedAt > snapshot.fetchedAt {
+                Diag.refresh.log("fetch id=\(id, privacy: .public) dropped=stale")
                 return
             }
             consecutiveFailures[id] = 0
             lastGood[id] = snapshot
             cache.update(snapshot)
             await publish(snapshot)
+            Diag.refresh.log("""
+            fetch id=\(id, privacy: .public) ok \
+            metrics=\(snapshot.metrics.count, privacy: .public) \
+            took=\(String(format: "%.2f", Date().timeIntervalSince(started)), privacy: .public)s
+            """)
         } catch ProviderError.authRequired(let hint) {
             consecutiveFailures[id, default: 0] += 1
             await publishDegraded(id, status: .authRequired(hint: hint))
+            Diag.refresh.error("""
+            fetch id=\(id, privacy: .public) authRequired hint=\(hint, privacy: .public) \
+            took=\(String(format: "%.2f", Date().timeIntervalSince(started)), privacy: .public)s
+            """)
         } catch {
             consecutiveFailures[id, default: 0] += 1
             await publishDegraded(id, status: .error(message: error.localizedDescription))
+            Diag.refresh.error("""
+            fetch id=\(id, privacy: .public) error=\(error.localizedDescription, privacy: .public) \
+            took=\(String(format: "%.2f", Date().timeIntervalSince(started)), privacy: .public)s
+            """)
         }
     }
 
