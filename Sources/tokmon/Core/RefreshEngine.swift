@@ -142,11 +142,6 @@ actor RefreshEngine {
     private func performFetch(_ provider: any UsageProvider) async {
         let id = provider.id
         let started = Date()
-        let failures = consecutiveFailures[id] ?? 0
-        Diag.refresh.log("""
-        fetch id=\(id, privacy: .public) start \
-        priorFailures=\(failures, privacy: .public)
-        """)
         do {
             let snapshot = try await fetchWithDeadline(provider)
             // Drop results older than what we already published.
@@ -168,6 +163,7 @@ actor RefreshEngine {
             await publishDegraded(id, status: .authRequired(hint: hint))
             Diag.refresh.error("""
             fetch id=\(id, privacy: .public) authRequired hint=\(hint, privacy: .public) \
+            failures=\(self.consecutiveFailures[id] ?? 0, privacy: .public) \
             took=\(String(format: "%.2f", Date().timeIntervalSince(started)), privacy: .public)s
             """)
         } catch {
@@ -175,6 +171,7 @@ actor RefreshEngine {
             await publishDegraded(id, status: .error(message: error.localizedDescription))
             Diag.refresh.error("""
             fetch id=\(id, privacy: .public) error=\(error.localizedDescription, privacy: .public) \
+            failures=\(self.consecutiveFailures[id] ?? 0, privacy: .public) \
             took=\(String(format: "%.2f", Date().timeIntervalSince(started)), privacy: .public)s
             """)
         }

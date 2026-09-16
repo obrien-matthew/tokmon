@@ -48,21 +48,15 @@ struct ClaudeSubscriptionProvider: UsageProvider {
         // A 401/403 with one candidate advances to the next (expiry-checked
         // tokens can still be revoked). At most two requests per poll, and
         // only on that path — the cadence stays polite.
-        for (index, token) in resolution.tokens.enumerated() {
+        for token in resolution.tokens {
             var request = URLRequest(url: Self.usageURL)
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
 
-            Diag.claude.log("request candidate=\(index, privacy: .public)")
             let (data, response) = try await HTTPSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw URLError(.badServerResponse)
             }
-            Diag.claude.log("""
-            response candidate=\(index, privacy: .public) \
-            status=\(http.statusCode, privacy: .public) \
-            bytes=\(data.count, privacy: .public)
-            """)
             switch http.statusCode {
             case 200:
                 let usage = try Self.makeDecoder().decode(OAuthUsage.self, from: data)
