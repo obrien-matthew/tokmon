@@ -117,7 +117,7 @@ struct OpenRouterProvider: UsageProvider {
         request.setValue("tokmon/0.1.0 (github.com/obrien-matthew/tokmon)", forHTTPHeaderField: "User-Agent")
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await HTTPSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 return Outcome(error: URLError(.badServerResponse))
             }

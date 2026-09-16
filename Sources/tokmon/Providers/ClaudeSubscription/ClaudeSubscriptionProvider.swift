@@ -54,7 +54,7 @@ struct ClaudeSubscriptionProvider: UsageProvider {
             request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
 
             Diag.claude.log("request candidate=\(index, privacy: .public)")
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await HTTPSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw URLError(.badServerResponse)
             }

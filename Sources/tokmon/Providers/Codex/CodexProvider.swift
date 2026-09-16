@@ -151,7 +151,7 @@ struct CodexProvider: UsageProvider {
         request.setValue(credential.accountId, forHTTPHeaderField: "ChatGPT-Account-Id")
         request.setValue("tokmon/0.1.0 (github.com/obrien-matthew/tokmon)", forHTTPHeaderField: "User-Agent")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await HTTPSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw URLError(.badServerResponse)
         }
