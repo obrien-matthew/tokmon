@@ -31,14 +31,15 @@ final class OpenRouterProviderTests: XCTestCase {
         XCTAssertEqual(MetricGaugeRow.valueText(for: metric), "$15.00 / $25.00")
     }
 
-    /// A cap with no reported remainder is untouched, not exhausted —
-    /// defaulting the other way would invent a full bar out of nothing.
-    func testCapWithoutRemainderReadsAsUnused() throws {
-        let metric = try XCTUnwrap(OpenRouterProvider.keyCapMetric(.init(
+    /// A cap without a finite remainder is incomplete, so it cannot be
+    /// rendered as an invented unused or exhausted gauge.
+    func testCapWithoutRemainderIsOmitted() {
+        XCTAssertNil(OpenRouterProvider.keyCapMetric(.init(
             limit: 25, limitRemaining: nil, limitReset: "monthly"
         )))
-        XCTAssertEqual(metric.used, 0)
-        XCTAssertEqual(metric.fraction, 0)
+        XCTAssertNil(OpenRouterProvider.keyCapMetric(.init(
+            limit: 25, limitRemaining: .infinity, limitReset: "monthly"
+        )))
     }
 
     func testUncappedKeyHasNoGauge() {
@@ -79,7 +80,8 @@ final class OpenRouterProviderTests: XCTestCase {
 
         let overdrawn = OpenRouterProvider.Credits(totalCredits: 20, totalUsage: 25)
         let overdrawnMetric = try XCTUnwrap(OpenRouterProvider.balanceMetric(overdrawn.balance))
-        XCTAssertEqual(MetricGaugeRow.valueText(for: overdrawnMetric), "$0.00")
+        XCTAssertEqual(overdrawnMetric.used, -5)
+        XCTAssertEqual(MetricGaugeRow.valueText(for: overdrawnMetric), "$-5.00")
     }
 
     func testIncompleteCreditsPayloadYieldsNoBalance() {
@@ -98,6 +100,35 @@ final class OpenRouterProviderTests: XCTestCase {
         XCTAssertEqual(OpenRouterProvider.metrics(credits: credits, key: nil).map(\.id), ["credits"])
         XCTAssertEqual(OpenRouterProvider.metrics(credits: nil, key: key).map(\.id), ["key-cap"])
         XCTAssertTrue(OpenRouterProvider.metrics(credits: nil, key: nil).isEmpty)
+    }
+
+    func testUncappedKeySuccessResolvesToEmptyMetricsAfterCreditsUnauthorized() throws {
+        let metrics = try OpenRouterProvider.resolve(
+            credits: .init(error: URLError(.badServerResponse), unauthorized: true),
+            key: .init(value: .init(limit: nil, limitRemaining: nil, limitReset: nil))
+        )
+
+        XCTAssertTrue(metrics.isEmpty)
+    }
+
+    func testNeitherEndpointSuccessWithUnauthorizedResultRequiresAuthentication() {
+        XCTAssertThrowsError(try OpenRouterProvider.resolve(
+            credits: .init(error: URLError(.badServerResponse)),
+            key: .init(error: URLError(.badServerResponse), unauthorized: true)
+        )) { error in
+            guard case .authRequired = error as? ProviderError else {
+                return XCTFail("Expected authRequired, got \(error)")
+            }
+        }
+    }
+
+    func testNeitherEndpointSuccessThrowsFirstUnderlyingError() {
+        XCTAssertThrowsError(try OpenRouterProvider.resolve(
+            credits: .init(error: URLError(.timedOut)),
+            key: .init(error: URLError(.cannotConnectToHost))
+        )) { error in
+            XCTAssertEqual((error as? URLError)?.code, .timedOut)
+        }
     }
 
     @MainActor

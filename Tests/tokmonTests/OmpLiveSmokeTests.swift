@@ -6,7 +6,12 @@ import XCTest
 /// the real usage endpoints, exercising the same headers the providers
 /// send. Skipped unless TOKMON_LIVE_SMOKE=1 (never runs in CI); requires
 /// a signed-in omp on this machine. Never prints tokens.
+
 final class OmpLiveSmokeTests: XCTestCase {
+    private struct OpenRouterEnvelope<Payload: Decodable>: Decodable {
+        let data: Payload
+    }
+
     private func requireSmoke() throws {
         guard ProcessInfo.processInfo.environment["TOKMON_LIVE_SMOKE"] == "1" else {
             throw XCTSkip("Set TOKMON_LIVE_SMOKE=1 to run live endpoint smoke")
@@ -58,26 +63,29 @@ final class OmpLiveSmokeTests: XCTestCase {
         XCTAssertFalse(CodexProvider.metrics(from: usage).isEmpty)
     }
 
-    /// End-to-end: omp-sourced API key, both live endpoints, real
-    /// mapping. Asserts the gauge is present and bounded rather than a
-    /// specific balance, which moves between runs.
+    /// End-to-end: an omp-sourced API key authenticates independently to
+    /// each live OpenRouter endpoint and each response has its documented
+    /// envelope shape.
     func testOpenRouterEndpointsAcceptOmpAPIKey() async throws {
         try requireSmoke()
-        guard OpenRouterProvider.resolveKey() != nil else {
+        guard let key = await OpenRouterProvider.resolveKey() else {
             throw XCTSkip("No omp openrouter api_key on this machine")
         }
 
-        let snapshot = try await OpenRouterProvider().fetchSnapshot()
-        XCTAssertEqual(snapshot.status, .ok)
-        XCTAssertFalse(snapshot.metrics.isEmpty)
-
-        let balance = try XCTUnwrap(snapshot.metrics.first { $0.id == "credits" })
-        XCTAssertNil(balance.limit, "lifetime totals must never produce a bar")
-
-        if let cap = snapshot.metrics.first(where: { $0.id == "key-cap" }) {
-            XCTAssertEqual(cap.unit, .usd)
-            XCTAssertGreaterThan(try XCTUnwrap(cap.limit), 0)
-            XCTAssertNotNil(cap.fraction)
+        func fetch(_ url: URL) async throws -> Data {
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            request.setValue("tokmon/0.1.0 (github.com/obrien-matthew/tokmon)", forHTTPHeaderField: "User-Agent")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            XCTAssertEqual(try XCTUnwrap(response as? HTTPURLResponse).statusCode, 200)
+            return data
         }
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let creditsData = try await fetch(URL(string: "https://openrouter.ai/api/v1/credits")!)
+        _ = try decoder.decode(OpenRouterEnvelope<OpenRouterProvider.Credits>.self, from: creditsData)
+        let keyData = try await fetch(URL(string: "https://openrouter.ai/api/v1/key")!)
+        _ = try decoder.decode(OpenRouterEnvelope<OpenRouterProvider.KeyInfo>.self, from: keyData)
     }
 }

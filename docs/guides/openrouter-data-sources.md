@@ -6,8 +6,9 @@ has no bar.
 ## Endpoints
 
 Both are called concurrently on every poll (5 minutes), with the same
-bare API key in an `Authorization: Bearer` header. Either one failing
-degrades to the other; the provider only errors when both fail.
+bare API key in an `Authorization: Bearer` header. A successfully decoded
+response makes the poll `.ok`, even if that response legitimately emits no
+metric; the provider only errors when neither endpoint decodes.
 
 ### `GET https://openrouter.ai/api/v1/key` — the gauge
 
@@ -21,8 +22,10 @@ The metric is `used = limit − limit_remaining`, `limit = limit`.
 - That difference, not any `usage_*` field, is what OpenRouter actually
   enforces. The two disagree by rounding: a `usage_monthly` of 25.006
   against a 25 cap renders the self-inconsistent `$25.01 / $25.00`.
-- `limit: null` means the key has no spend cap, so no gauge is emitted
-  at all — the balance row carries the provider on its own.
+- `limit: null` means the key has no spend cap, so no gauge is emitted.
+- A positive finite `limit` without a finite `limit_remaining` is an
+  incomplete cap payload, so no gauge is emitted rather than inventing an
+  unused or exhausted amount.
 - The label comes from `limit_reset`: `Key spend (monthly)`,
   `Key spend (lifetime)` when it is null, `Key spend (<value>)` for
   anything unrecognised.
@@ -40,8 +43,9 @@ does not move it.
 {"data":{"total_credits":60,"total_usage":54.561828163}}
 ```
 
-The balance is `total_credits − total_usage`, emitted as an open-ended
-counter (`limit: nil` → text, no bar), exactly like Codex's credit line.
+The balance is exactly `total_credits − total_usage`, including a negative
+overdrawn balance, emitted as an open-ended counter (`limit: nil` → text,
+no bar), exactly like Codex's credit line.
 
 Both figures are **lifetime cumulative**, which is why there is no bar:
 `1 − balance / total_credits` drifts toward 100% purely as a function of
@@ -51,8 +55,8 @@ would devalue the escalation colours on every other provider's row, so
 the number is shown plainly instead.
 
 The docs describe this route as management-key-only, but ordinary
-inference keys are accepted today. A 403 here is treated as a soft
-failure rather than an auth problem: the cap gauge stands alone.
+inference keys are accepted today. A 403 here is a soft failure when the
+key endpoint decodes successfully; then its cap gauge stands alone.
 
 ## Credentials
 
@@ -83,9 +87,9 @@ any network call, and the menu shows the hint with cached gauges intact.
 | Situation | Result |
 | --- | --- |
 | No key found anywhere | `authRequired`, no request made |
-| One endpoint succeeds | `.ok` with whatever metrics survived |
-| Both fail, either returned 401 | `authRequired` |
-| Both fail otherwise | error; `RefreshEngine` republishes cached metrics as degraded |
+| At least one endpoint decodes successfully | `.ok` with the metrics its decoded payloads can emit, including none |
+| Neither endpoint decodes, either returned 401 | `authRequired` |
+| Neither endpoint decodes otherwise | error; `RefreshEngine` republishes cached metrics as degraded |
 
 ## Live smoke
 
@@ -96,6 +100,7 @@ real key against both endpoints:
 TOKMON_LIVE_SMOKE=1 swift test --filter testOpenRouterEndpointsAcceptOmpAPIKey
 ```
 
-It skips without `TOKMON_LIVE_SMOKE=1` or an omp key, and asserts shape
-(balance unbounded, cap bounded and fractional) rather than amounts,
-which move between runs.
+It skips without `TOKMON_LIVE_SMOKE=1` or an omp key, and independently
+asserts HTTP 200 plus the documented `data` envelope for both `/credits`
+and `/key`; it does not assert moving amounts or infer endpoint health from
+emitted metrics.

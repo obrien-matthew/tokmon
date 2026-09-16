@@ -19,6 +19,15 @@ actor RefreshEngine {
     /// its replacement started would clear the replacement's slot and
     /// leave the watchdog blind.
     private var generation: [String: Int] = [:]
+    /// Fetches that outlived their deadline and were abandoned, counted
+    /// per provider so abandonment stays bounded.
+    private struct Key: Hashable {
+        let id: String
+        let generation: Int
+    }
+    private var orphaned: Set<Key> = []
+    private var finishedWork: Set<Key> = []
+    private var orphans: [String: Int] = [:]
     private var lastAttempt: [String: Date] = [:]
     private var consecutiveFailures: [String: Int] = [:]
     private var loops: [Task<Void, Never>] = []
@@ -28,6 +37,10 @@ actor RefreshEngine {
 
     private static let menuOpenDebounce: TimeInterval = 15
     private static let maxBackoff: TimeInterval = 1800
+    /// Abandoned fetches tolerated per provider before new work stops
+    /// being started for it. Only reachable when a provider's fetch
+    /// ignores cancellation; the count drains as those tasks finish.
+    private static let maxOrphans = 3
     /// Ceiling on one fetch, above the 30s transport timeout so the
     /// network layer normally reports the real error first. This is the
     /// backstop for a fetch that blocks off-network — e.g. the
@@ -56,6 +69,23 @@ actor RefreshEngine {
         }
         observeWake()
         observeNetwork()
+    }
+
+    /// Tears down loops and system observers. The app never stops the
+    /// engine, but tests must: `start()` otherwise leaves a live
+    /// NWPathMonitor, a workspace wake observer, and a 5-minute loop
+    /// running past the end of the test that created them.
+    func stop() {
+        loops.forEach { $0.cancel() }
+        loops.removeAll()
+        inFlight.values.forEach { $0.cancel() }
+        inFlight.removeAll()
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
+        pathMonitor?.cancel()
+        pathMonitor = nil
     }
 
     /// Called from the menu content's onAppear; debounced so reopening the
@@ -99,6 +129,7 @@ actor RefreshEngine {
 
     private func startRefresh(_ provider: any UsageProvider, force: Bool) {
         let id = provider.id
+        var replacingOverdue = false
         if inFlight[id] != nil {
             let age = lastAttempt[id].map { Date().timeIntervalSince($0) } ?? 0
             guard age >= fetchDeadline else {
@@ -118,17 +149,32 @@ actor RefreshEngine {
             """)
             inFlight[id]?.cancel()
             inFlight[id] = nil
+            replacingOverdue = true
         }
-        if !force, let last = lastAttempt[id],
+        // Debounce only suppresses a *new* fetch. Having just cancelled an
+        // overdue one, returning here would leave the provider with no
+        // fetch at all — the wedge again, by a different route. Reachable
+        // whenever fetchDeadline < menuOpenDebounce.
+        if !force, !replacingOverdue, let last = lastAttempt[id],
            Date().timeIntervalSince(last) < Self.menuOpenDebounce {
+            return
+        }
+        guard orphans[id, default: 0] < Self.maxOrphans else {
+            // Abandoned fetches are unbounded only if we keep starting
+            // new ones on top of them; a provider whose work ignores
+            // cancellation would otherwise leak a task per poll.
+            Diag.refresh.error("""
+            skip id=\(id, privacy: .public) reason=orphan-cap \
+            orphans=\(self.orphans[id] ?? 0, privacy: .public)
+            """)
             return
         }
         lastAttempt[id] = Date()
         let mine = (generation[id] ?? 0) + 1
         generation[id] = mine
         inFlight[id] = Task {
-            await self.performFetch(provider)
-            await self.clearInFlight(id, generation: mine)
+            await self.performFetch(provider, generation: mine)
+            self.clearInFlight(id, generation: mine)
         }
     }
 
@@ -139,11 +185,23 @@ actor RefreshEngine {
         inFlight[id] = nil
     }
 
-    private func performFetch(_ provider: any UsageProvider) async {
+    /// A superseded fetch must not publish. Its result describes a world
+    /// its replacement has already moved past, so committing it would
+    /// overwrite fresh state with stale status and inflate backoff with
+    /// failures nobody is waiting on.
+    private func isCurrent(_ id: String, _ generation: Int) -> Bool {
+        self.generation[id] == generation
+    }
+
+    private func performFetch(_ provider: any UsageProvider, generation: Int) async {
         let id = provider.id
         let started = Date()
         do {
-            let snapshot = try await fetchWithDeadline(provider)
+            let snapshot = try await fetchWithDeadline(provider, generation: generation)
+            guard isCurrent(id, generation) else {
+                Diag.refresh.log("fetch id=\(id, privacy: .public) dropped=superseded")
+                return
+            }
             // Drop results older than what we already published.
             if let previous = lastGood[id], previous.fetchedAt > snapshot.fetchedAt {
                 Diag.refresh.log("fetch id=\(id, privacy: .public) dropped=stale")
@@ -159,6 +217,7 @@ actor RefreshEngine {
             took=\(String(format: "%.2f", Date().timeIntervalSince(started)), privacy: .public)s
             """)
         } catch ProviderError.authRequired(let hint) {
+            guard isCurrent(id, generation) else { return }
             consecutiveFailures[id, default: 0] += 1
             await publishDegraded(id, status: .authRequired(hint: hint))
             Diag.refresh.error("""
@@ -167,6 +226,7 @@ actor RefreshEngine {
             took=\(String(format: "%.2f", Date().timeIntervalSince(started)), privacy: .public)s
             """)
         } catch {
+            guard isCurrent(id, generation) else { return }
             consecutiveFailures[id, default: 0] += 1
             await publishDegraded(id, status: .error(message: error.localizedDescription))
             Diag.refresh.error("""
@@ -213,14 +273,17 @@ actor RefreshEngine {
     /// The fetch deliberately runs as an *unstructured* task that nothing
     /// awaits on the way out. A structured task group would be tidier but
     /// awaits its children at scope exit, so a fetch that ignores
-    /// cancellation — a socket the OS has not given up on, or the
-    /// synchronous Keychain `security` call blocking a thread — would hold
-    /// the deadline hostage and reproduce the very wedge this fixes.
-    /// Cancellation is still requested; if it is ignored, that task leaks
-    /// until it finishes on its own, which is the price of a loop that
-    /// always comes back.
-    private func fetchWithDeadline(_ provider: any UsageProvider) async throws -> ProviderSnapshot {
+    /// cancellation would hold the deadline hostage and reproduce the very
+    /// wedge this fixes. Cancellation is still requested; if it is
+    /// ignored, that task is counted as an orphan until it finishes, and
+    /// `startRefresh` stops starting new work for a provider holding
+    /// `maxOrphans` of them — abandonment is bounded, not unlimited.
+    private func fetchWithDeadline(
+        _ provider: any UsageProvider,
+        generation: Int
+    ) async throws -> ProviderSnapshot {
         let deadline = fetchDeadline
+        let id = provider.id
         let rendezvous = FirstResult()
 
         let work = Task {
@@ -229,6 +292,7 @@ actor RefreshEngine {
             } catch {
                 await rendezvous.finish(.failure(error))
             }
+            self.workFinished(id, generation: generation)
         }
         let timer = Task {
             try? await Task.sleep(for: .seconds(deadline))
@@ -239,7 +303,36 @@ actor RefreshEngine {
             work.cancel()
             timer.cancel()
         }
-        return try await rendezvous.value().get()
+        let result = await rendezvous.value()
+        if case .failure(let error) = result, error is FetchTimeout {
+            markOrphaned(id, generation: generation)
+        }
+        return try result.get()
+    }
+
+    /// The fetch outlived its deadline; its task is still running and may
+    /// never stop. Count it until it reports back.
+    private func markOrphaned(_ id: String, generation: Int) {
+        guard !finishedWork.contains(Key(id: id, generation: generation)) else { return }
+        orphaned.insert(Key(id: id, generation: generation))
+        orphans[id, default: 0] += 1
+        Diag.refresh.error("""
+        orphan id=\(id, privacy: .public) created \
+        outstanding=\(self.orphans[id] ?? 0, privacy: .public)
+        """)
+    }
+
+    /// Called by every fetch task when it finally completes, on time or
+    /// long after being abandoned.
+    private func workFinished(_ id: String, generation: Int) {
+        let key = Key(id: id, generation: generation)
+        finishedWork.insert(key)
+        guard orphaned.remove(key) != nil else { return }
+        orphans[id, default: 1] -= 1
+        Diag.refresh.log("""
+        orphan id=\(id, privacy: .public) finished \
+        outstanding=\(self.orphans[id] ?? 0, privacy: .public)
+        """)
     }
 
     /// Wake and network restoration invalidate the reason a provider was

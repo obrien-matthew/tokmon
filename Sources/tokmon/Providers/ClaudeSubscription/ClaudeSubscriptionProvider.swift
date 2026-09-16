@@ -27,7 +27,7 @@ struct ClaudeSubscriptionProvider: UsageProvider {
     private static let refreshHint = "Open Claude Code or omp to refresh login"
 
     func fetchSnapshot() async throws -> ProviderSnapshot {
-        let keychainJSON = try? SecurityCLI.findGenericPassword(service: Self.keychainService)
+        let keychainJSON = try? await SecurityCLI.findGenericPassword(service: Self.keychainService)
         let omp = OmpCredentialStore.credential(provider: "anthropic")
         let resolution = Self.resolveTokens(
             keychainJSON: keychainJSON,

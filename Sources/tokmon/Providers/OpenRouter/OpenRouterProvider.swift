@@ -40,35 +40,24 @@ struct OpenRouterProvider: UsageProvider {
     private static let authHint = "Add an OpenRouter key to omp or Keychain (tokmon-openrouter)"
 
     func fetchSnapshot() async throws -> ProviderSnapshot {
-        guard let key = Self.resolveKey() else {
+        guard let key = await Self.resolveKey() else {
             throw ProviderError.authRequired(hint: Self.authHint)
         }
 
         async let creditsCall = Self.fetch(Credits.self, from: Self.creditsURL, key: key)
         async let keyCall = Self.fetch(KeyInfo.self, from: Self.keyURL, key: key)
-        let credits = await creditsCall
-        let keyInfo = await keyCall
+        let metrics = try Self.resolve(credits: await creditsCall, key: await keyCall)
 
-        let metrics = Self.metrics(credits: credits.value, key: keyInfo.value)
-        guard !metrics.isEmpty else {
-            // Both calls came back empty. A 401 anywhere means the key
-            // itself is the problem and cached gauges should show a
-            // hint; anything else is transient and degrades instead.
-            if credits.unauthorized || keyInfo.unauthorized {
-                throw ProviderError.authRequired(hint: Self.authHint)
-            }
-            throw credits.error ?? keyInfo.error ?? URLError(.cannotParseResponse)
-        }
         return ProviderSnapshot(providerID: id, fetchedAt: Date(), status: .ok, metrics: metrics)
     }
 
     // MARK: - Credentials
 
-    static func resolveKey() -> String? {
+    static func resolveKey() async -> String? {
         if let key = OmpCredentialStore.apiKey(provider: "openrouter"), !key.isEmpty {
             return key
         }
-        guard let keychain = try? SecurityCLI.findGenericPassword(service: "tokmon-openrouter"),
+        guard let keychain = try? await SecurityCLI.findGenericPassword(service: "tokmon-openrouter"),
               !keychain.isEmpty
         else {
             return nil
@@ -101,7 +90,7 @@ struct OpenRouterProvider: UsageProvider {
         let limitReset: String?
     }
 
-    private struct Outcome<Payload> {
+    struct Outcome<Payload> {
         var value: Payload?
         var error: Error?
         var unauthorized = false
@@ -150,6 +139,18 @@ struct OpenRouterProvider: UsageProvider {
         return metrics
     }
 
+    /// Resolves independent endpoint outcomes. A decoded payload proves the
+    /// key worked for that endpoint even when its payload emits no metric.
+    static func resolve(credits: Outcome<Credits>, key: Outcome<KeyInfo>) throws -> [UsageMetric] {
+        guard credits.value != nil || key.value != nil else {
+            if credits.unauthorized || key.unauthorized {
+                throw ProviderError.authRequired(hint: Self.authHint)
+            }
+            throw credits.error ?? key.error ?? URLError(.cannotParseResponse)
+        }
+        return metrics(credits: credits.value, key: key.value)
+    }
+
     /// `used` comes from the API's own arithmetic (`limit - limit_remaining`)
     /// rather than a `usage_*` field: the two disagree by rounding (a
     /// `usage_monthly` of 25.006 against a 25 cap would render the
@@ -160,8 +161,9 @@ struct OpenRouterProvider: UsageProvider {
     /// nothing says whether it is calendar- or key-anniversary-based, so
     /// a countdown would be invented.
     static func keyCapMetric(_ key: KeyInfo?) -> UsageMetric? {
-        guard let key, let limit = key.limit, limit.isFinite, limit > 0 else { return nil }
-        let remaining = key.limitRemaining.flatMap { $0.isFinite ? $0 : nil } ?? limit
+        guard let key, let limit = key.limit, limit.isFinite, limit > 0,
+              let remaining = key.limitRemaining, remaining.isFinite
+        else { return nil }
         return UsageMetric(
             id: "key-cap",
             label: keyCapLabel(reset: key.limitReset),
@@ -180,7 +182,7 @@ struct OpenRouterProvider: UsageProvider {
             id: "credits",
             label: "Balance",
             kind: .spend,
-            used: max(balance, 0),
+            used: balance,
             limit: nil,
             unit: .usd,
             window: nil
