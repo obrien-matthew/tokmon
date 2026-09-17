@@ -38,7 +38,7 @@ final class RefreshEngineTests: XCTestCase {
             cache: SnapshotCache(directory: directory),
             initial: [:],
             fetchDeadline: fetchDeadline,
-            publish: { await collector.append($0) }
+            publish: { snapshot, sequence in await collector.append(snapshot, sequence: sequence) }
         )
         self.engine = engine
         return engine
@@ -78,47 +78,13 @@ final class RefreshEngineTests: XCTestCase {
         XCTAssertFalse(published.status.isOK, "the loop must come back from a hung fetch on its own")
     }
 
-    /// A fetch abandoned at the deadline keeps running. When it finally
-    /// fails, it must not overwrite the result its replacement already
-    /// published, nor count as a failure against the current attempt.
-    func testSupersededFetchCannotClobberItsReplacement() async throws {
-        let provider = ControllableProvider(id: "hang")
-        let collector = Collector()
-        let engine = makeEngine(providers: [provider], fetchDeadline: 0.2, collector: collector)
-
-        // Attempt 1 hangs past the deadline and is abandoned.
-        await engine.refreshAll(force: true)
-        let timedOut = try await collector.next()
-        XCTAssertFalse(timedOut.status.isOK)
-
-        // Attempt 2 succeeds while attempt 1 is still running.
-        await provider.release()
-        await engine.refreshAll(force: true)
-        let succeeded = try await collector.next()
-        XCTAssertTrue(succeeded.status.isOK)
-
-        // Now let the abandoned attempt 1 fail. Its failure belongs to a
-        // generation nobody is waiting on and must be dropped.
-        await provider.failOutstanding()
-        try await Task.sleep(for: .seconds(0.3))
-
-        let all = await collector.snapshots
-        XCTAssertTrue(
-            try XCTUnwrap(all.last).status.isOK,
-            "a superseded fetch must not republish over a newer success"
-        )
-        XCTAssertEqual(all.filter { !$0.status.isOK }.count, 1, "stale failure must not re-degrade")
-    }
-
-    /// The overdue-cancel path in `startRefresh` clears the in-flight slot
-    /// before the debounce check, so the debounce must not then decline to
-    /// start the replacement. It is defensive: while `performFetch`
-    /// self-enforces the deadline, the slot is always cleared by the fetch
-    /// itself, so the branch is unreachable today. Asserting it needs a
-    /// stuck `performFetch`, which the deadline exists to prevent — the
-    /// guard stays as protection against a future change that reintroduces
-    /// one, and `testHungFetchIsAbandonedAndTheProviderStillRecovers`
-    /// covers the path a user actually takes.
+    // Supersession is covered where it is actually observable:
+    // `AppStateTests.testStaleSequenceCannotOverwriteANewerSnapshot`.
+    // An engine-level test cannot reach it — once a fetch times out,
+    // `performFetch` has already returned and its straggler can never
+    // publish again, so any such test passes with the guards removed.
+    // Verified by stripping every `isCurrent` check in a scratch
+    // worktree: two successive attempts at writing one both stayed green.
 
     func testCachePersistsSuccessesToItsOwnDirectory() async throws {
         let provider = ControllableProvider(id: "hang")
@@ -139,13 +105,15 @@ private struct CollectorTimeout: LocalizedError {
     var errorDescription: String? { "No snapshot published within \(seconds)s" }
 }
 
+
 /// Awaits publications instead of sleeping for them.
 private actor Collector {
     var snapshots: [ProviderSnapshot] = []
     private var consumed = 0
+
     private var waiter: CheckedContinuation<ProviderSnapshot?, Never>?
 
-    func append(_ snapshot: ProviderSnapshot) {
+    func append(_ snapshot: ProviderSnapshot, sequence: Int) {
         snapshots.append(snapshot)
         if let waiter {
             self.waiter = nil

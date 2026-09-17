@@ -31,8 +31,8 @@ struct TokmonApp: App {
             cached: cached,
             headlineMetricOverrides: settingsStore.settings.headlineMetricOverrides
         )
-        let engine = RefreshEngine(providers: providers, cache: cache, initial: cached) { snapshot in
-            await state.apply(snapshot)
+        let engine = RefreshEngine(providers: providers, cache: cache, initial: cached) { snapshot, sequence in
+            await state.apply(snapshot, sequence: sequence)
         }
 
         _state = StateObject(wrappedValue: state)

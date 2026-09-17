@@ -8,7 +8,9 @@ import Network
 actor RefreshEngine {
     private let providers: [any UsageProvider]
     private let cache: SnapshotCache
-    private let publish: @Sendable (ProviderSnapshot) async -> Void
+    /// Takes the attempt's sequence number so the consumer can drop a
+    /// straggler that lands after a newer attempt already applied.
+    private let publish: @Sendable (ProviderSnapshot, Int) async -> Void
 
     /// Last successful snapshot per provider; failures republish these
     /// metrics under a degraded status so the UI never goes blank.
@@ -30,6 +32,11 @@ actor RefreshEngine {
     private var pendingWork: Set<Key> = []
     private var orphaned: Set<Key> = []
     private var orphans: [String: Int] = [:]
+    /// Fetch and deadline tasks by key, so `stop()` can cancel the work
+    /// that actually holds a provider rather than just its wrapper.
+    private var liveTasks: [Key: Task<Void, Never>] = [:]
+    /// Terminal: a stopped engine starts no further fetches.
+    private var stopped = false
     private var lastAttempt: [String: Date] = [:]
     private var consecutiveFailures: [String: Int] = [:]
     private var loops: [Task<Void, Never>] = []
@@ -55,7 +62,7 @@ actor RefreshEngine {
         cache: SnapshotCache,
         initial: [String: ProviderSnapshot],
         fetchDeadline: TimeInterval = 45,
-        publish: @escaping @Sendable (ProviderSnapshot) async -> Void
+        publish: @escaping @Sendable (ProviderSnapshot, Int) async -> Void
     ) {
         self.providers = providers
         self.cache = cache
@@ -65,7 +72,7 @@ actor RefreshEngine {
     }
 
     func start() {
-        guard loops.isEmpty else { return }
+        guard !stopped, loops.isEmpty else { return }
         for provider in providers {
             loops.append(Task { await self.runLoop(for: provider) })
         }
@@ -73,15 +80,23 @@ actor RefreshEngine {
         observeNetwork()
     }
 
-    /// Tears down loops and system observers. The app never stops the
-    /// engine, but tests must: `start()` otherwise leaves a live
-    /// NWPathMonitor, a workspace wake observer, and a 5-minute loop
-    /// running past the end of the test that created them.
+    /// Tears down loops, outstanding work, and system observers. The app
+    /// never stops the engine; tests must, or `start()` leaves a live
+    /// NWPathMonitor, a wake observer, and a 5-minute loop running past
+    /// the test that created them. Terminal by design: a stopped engine
+    /// refuses to start new fetches, so a queued wake/network callback
+    /// cannot resurrect work after teardown.
     func stop() {
+        stopped = true
         loops.forEach { $0.cancel() }
         loops.removeAll()
         inFlight.values.forEach { $0.cancel() }
         inFlight.removeAll()
+        // The fetch and its deadline timer are what actually hold a
+        // provider's work; cancelling only the wrapper above would leave
+        // them running and still able to publish after teardown.
+        liveTasks.values.forEach { $0.cancel() }
+        liveTasks.removeAll()
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
             self.wakeObserver = nil
@@ -130,6 +145,7 @@ actor RefreshEngine {
     }
 
     private func startRefresh(_ provider: any UsageProvider, force: Bool) {
+        guard !stopped else { return }
         let id = provider.id
         var replacingOverdue = false
         if inFlight[id] != nil {
@@ -212,7 +228,7 @@ actor RefreshEngine {
             consecutiveFailures[id] = 0
             lastGood[id] = snapshot
             cache.update(snapshot)
-            await publish(snapshot)
+            await publish(snapshot, generation)
             Diag.refresh.log("""
             fetch id=\(id, privacy: .public) ok \
             metrics=\(snapshot.metrics.count, privacy: .public) \
@@ -221,7 +237,7 @@ actor RefreshEngine {
         } catch ProviderError.authRequired(let hint) {
             guard isCurrent(id, generation) else { return }
             consecutiveFailures[id, default: 0] += 1
-            await publishDegraded(id, status: .authRequired(hint: hint))
+            await publishDegraded(id, status: .authRequired(hint: hint), generation: generation)
             Diag.refresh.error("""
             fetch id=\(id, privacy: .public) authRequired hint=\(hint, privacy: .public) \
             failures=\(self.consecutiveFailures[id] ?? 0, privacy: .public) \
@@ -230,7 +246,7 @@ actor RefreshEngine {
         } catch {
             guard isCurrent(id, generation) else { return }
             consecutiveFailures[id, default: 0] += 1
-            await publishDegraded(id, status: .error(message: error.localizedDescription))
+            await publishDegraded(id, status: .error(message: error.localizedDescription), generation: generation)
             Diag.refresh.error("""
             fetch id=\(id, privacy: .public) error=\(error.localizedDescription, privacy: .public) \
             failures=\(self.consecutiveFailures[id] ?? 0, privacy: .public) \
@@ -288,7 +304,8 @@ actor RefreshEngine {
         let id = provider.id
         let rendezvous = FirstResult()
 
-        pendingWork.insert(Key(id: id, generation: generation))
+        let key = Key(id: id, generation: generation)
+        pendingWork.insert(key)
         let work = Task {
             do {
                 await rendezvous.finish(.success(try await provider.fetchSnapshot()))
@@ -297,6 +314,9 @@ actor RefreshEngine {
             }
             self.workFinished(id, generation: generation)
         }
+        // Registered so `stop()` can cancel work that outlived its
+        // deadline; the entry is removed when the task reports back.
+        liveTasks[key] = work
         let timer = Task {
             try? await Task.sleep(for: .seconds(deadline))
             guard !Task.isCancelled else { return }
@@ -336,6 +356,7 @@ actor RefreshEngine {
     private func workFinished(_ id: String, generation: Int) {
         let key = Key(id: id, generation: generation)
         pendingWork.remove(key)
+        liveTasks[key] = nil
         guard orphaned.remove(key) != nil else { return }
         orphans[id, default: 1] -= 1
         Diag.refresh.log("""
@@ -358,7 +379,7 @@ actor RefreshEngine {
 
     /// Republish last-known-good metrics under a degraded status; fetchedAt
     /// stays at the old value so the UI's staleness note is truthful.
-    private func publishDegraded(_ id: String, status: ProviderStatus) async {
+    private func publishDegraded(_ id: String, status: ProviderStatus, generation: Int) async {
         let previous = lastGood[id]
         let snapshot = ProviderSnapshot(
             providerID: id,
@@ -366,7 +387,7 @@ actor RefreshEngine {
             status: status,
             metrics: previous?.metrics ?? []
         )
-        await publish(snapshot)
+        await publish(snapshot, generation)
     }
 
     // MARK: - Wake / network recovery

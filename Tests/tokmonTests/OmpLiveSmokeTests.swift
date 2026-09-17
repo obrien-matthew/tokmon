@@ -63,12 +63,15 @@ final class OmpLiveSmokeTests: XCTestCase {
         XCTAssertFalse(CodexProvider.metrics(from: usage).isEmpty)
     }
 
-    /// End-to-end: an omp-sourced API key authenticates independently to
-    /// each live OpenRouter endpoint and each response has its documented
-    /// envelope shape.
+    /// End-to-end: the configured OpenRouter key — omp's `api_key` row,
+    /// which is how this machine is set up — authenticates independently
+    /// to each live endpoint, and each response has its documented
+    /// envelope shape. Reads the omp store directly rather than going
+    /// through `resolveKey()`, whose Keychain fallback would let this
+    /// pass while proving nothing about the omp path.
     func testOpenRouterEndpointsAcceptOmpAPIKey() async throws {
         try requireSmoke()
-        guard let key = await OpenRouterProvider.resolveKey() else {
+        guard let key = OmpCredentialStore.apiKey(provider: "openrouter") else {
             throw XCTSkip("No omp openrouter api_key on this machine")
         }
 

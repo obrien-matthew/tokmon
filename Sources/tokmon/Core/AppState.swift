@@ -23,6 +23,7 @@ final class AppState: ObservableObject {
     let providers: [ProviderInfo]
     @Published private(set) var snapshots: [String: ProviderSnapshot]
     @Published private(set) var headlineMetricOverrides: [String: String]
+    private var appliedSequence: [String: Int] = [:]
 
     init(
         providers: [any UsageProvider],
@@ -34,8 +35,17 @@ final class AppState: ObservableObject {
         self.headlineMetricOverrides = headlineMetricOverrides
     }
 
-    func apply(_ snapshot: ProviderSnapshot) {
-        snapshots[snapshot.providerID] = snapshot
+    /// `sequence` is the engine's per-provider attempt number. Publishing
+    /// is async, so a slow attempt can land after the attempt that
+    /// superseded it; dropping lower sequences keeps the newest result
+    /// on screen instead of letting a straggler overwrite it.
+    func apply(_ snapshot: ProviderSnapshot, sequence: Int = .max) {
+        let providerID = snapshot.providerID
+        if sequence != .max {
+            guard sequence >= appliedSequence[providerID] ?? 0 else { return }
+            appliedSequence[providerID] = sequence
+        }
+        snapshots[providerID] = snapshot
     }
 
     func setHeadlineMetric(_ metricID: String?, for providerID: String) {
