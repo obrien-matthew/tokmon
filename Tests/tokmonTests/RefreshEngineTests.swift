@@ -44,8 +44,18 @@ final class RefreshEngineTests: XCTestCase {
         return engine
     }
 
+    private func makeProvider(id: String) -> ControllableProvider {
+        let provider = ControllableProvider(id: id)
+        addTeardownBlock {
+            // The stub deliberately ignores cancellation while blocked.
+            // Always release its continuations, including when a test fails.
+            await provider.release()
+        }
+        return provider
+    }
+
     func testHungFetchIsAbandonedAndTheProviderStillRecovers() async throws {
-        let provider = ControllableProvider(id: "hang")
+        let provider = makeProvider(id: "hang")
         let collector = Collector()
         let engine = makeEngine(providers: [provider], fetchDeadline: 0.2, collector: collector)
 
@@ -68,7 +78,7 @@ final class RefreshEngineTests: XCTestCase {
     /// in `startRefresh`, which needs an external nudge to fire. Here
     /// `start()` is the only trigger and nothing else touches the engine.
     func testPollingLoopIterationEndsWithoutAnExternalTrigger() async throws {
-        let provider = ControllableProvider(id: "hang")
+        let provider = makeProvider(id: "hang")
         let collector = Collector()
         let engine = makeEngine(providers: [provider], fetchDeadline: 0.2, collector: collector)
 
@@ -82,7 +92,7 @@ final class RefreshEngineTests: XCTestCase {
     /// failure. Publishing that would hand a callback to an owner that has
     /// already torn down — in tests, one whose temp directory is gone.
     func testStoppedEngineDoesNotPublish() async throws {
-        let provider = ControllableProvider(id: "hang")
+        let provider = makeProvider(id: "hang")
         let collector = Collector()
         let engine = makeEngine(providers: [provider], fetchDeadline: 0.2, collector: collector)
 
@@ -100,7 +110,7 @@ final class RefreshEngineTests: XCTestCase {
     /// while its publication crosses to another actor. Stop during that
     /// suspension must close the destination gate before the callback lands.
     func testStopRejectsPublicationAlreadyAwaitingItsDestination() async throws {
-        let provider = ControllableProvider(id: "fast")
+        let provider = makeProvider(id: "fast")
         await provider.release()
         let collector = Collector()
         let release = AsyncGate()
@@ -139,7 +149,7 @@ final class RefreshEngineTests: XCTestCase {
     // worktree: two successive attempts at writing one both stayed green.
 
     func testCachePersistsSuccessesToItsOwnDirectory() async throws {
-        let provider = ControllableProvider(id: "hang")
+        let provider = makeProvider(id: "hang")
         await provider.release()
         let collector = Collector()
         let engine = makeEngine(providers: [provider], fetchDeadline: 1, collector: collector)
@@ -223,10 +233,9 @@ private actor AsyncGate {
     }
 }
 
-/// Hangs until released, mimicking a connection that dies across sleep.
-/// Deliberately ignores cancellation: the real hangs this guards against
-/// (an OS-level socket, a blocked `security` child) cannot be cancelled
-/// either, and a cooperative stub would not exercise the deadline.
+/// Hangs on a continuation until released, mimicking an operation that
+/// does not honor task cancellation. A cooperative stub would not exercise
+/// the deadline; the test case's teardown block releases every continuation.
 private final class ControllableProvider: UsageProvider, @unchecked Sendable {
     let id: String
     let descriptor: ProviderDescriptor
@@ -252,11 +261,8 @@ private final class ControllableProvider: UsageProvider, @unchecked Sendable {
     }
 
     func fetchSnapshot() async throws -> ProviderSnapshot {
-        await state.recordAttempt()
-        while await state.mode == .hang {
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
-        if await state.mode == .fail {
+        let mode = await state.beginAttempt()
+        if mode == .fail {
             throw URLError(.cannotConnectToHost)
         }
         return ProviderSnapshot(
@@ -274,13 +280,22 @@ private final class ControllableProvider: UsageProvider, @unchecked Sendable {
         enum Mode { case hang, succeed, fail }
         var mode: Mode = .hang
         var attempts = 0
+        private var waiters: [CheckedContinuation<Mode, Never>] = []
 
         func set(_ mode: Mode) {
             self.mode = mode
+            guard mode != .hang else { return }
+            let pending = waiters
+            waiters.removeAll()
+            pending.forEach { $0.resume(returning: mode) }
         }
 
-        func recordAttempt() {
+        func beginAttempt() async -> Mode {
             attempts += 1
+            guard mode == .hang else { return mode }
+            return await withCheckedContinuation { continuation in
+                waiters.append(continuation)
+            }
         }
     }
 }
