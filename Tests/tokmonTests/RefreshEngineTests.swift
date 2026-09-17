@@ -78,6 +78,24 @@ final class RefreshEngineTests: XCTestCase {
         XCTAssertFalse(published.status.isOK, "the loop must come back from a hung fetch on its own")
     }
 
+    /// `stop()` cancels in-flight work, which surfaces to the fetch as a
+    /// failure. Publishing that would hand a callback to an owner that has
+    /// already torn down — in tests, one whose temp directory is gone.
+    func testStoppedEngineDoesNotPublish() async throws {
+        let provider = ControllableProvider(id: "hang")
+        let collector = Collector()
+        let engine = makeEngine(providers: [provider], fetchDeadline: 0.2, collector: collector)
+
+        await engine.refreshAll(force: true)
+        await engine.stop()
+
+        // Long enough for the deadline to fire and its failure to travel
+        // through performFetch.
+        try await Task.sleep(for: .seconds(0.5))
+        let published = await collector.snapshots
+        XCTAssertTrue(published.isEmpty, "a stopped engine must not publish")
+    }
+
     // Supersession is covered where it is actually observable:
     // `AppStateTests.testStaleSequenceCannotOverwriteANewerSnapshot`.
     // An engine-level test cannot reach it — once a fetch times out,

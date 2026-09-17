@@ -207,8 +207,12 @@ actor RefreshEngine {
     /// its replacement has already moved past, so committing it would
     /// overwrite fresh state with stale status and inflate backoff with
     /// failures nobody is waiting on.
+    ///
+    /// A stopped engine is never current: `stop()` cancels in-flight work,
+    /// which surfaces as a fetch failure, and publishing that would hand
+    /// a callback to an owner that has already torn down.
     private func isCurrent(_ id: String, _ generation: Int) -> Bool {
-        self.generation[id] == generation
+        !stopped && self.generation[id] == generation
     }
 
     private func performFetch(_ provider: any UsageProvider, generation: Int) async {
@@ -375,6 +379,21 @@ actor RefreshEngine {
         backoff reset providers=\(self.consecutiveFailures.count, privacy: .public)
         """)
         consecutiveFailures.removeAll()
+        // Clearing the counter does not shorten a sleep already in
+        // progress: `runLoop` computed its delay before going to sleep, so
+        // a provider that failed while the machine was asleep would sit
+        // out the full 30-minute penalty after connectivity returned.
+        // Restarting the loops cancels those sleeps; the fresh loop fetches
+        // immediately and then resumes the provider's normal interval.
+        restartLoops()
+    }
+
+    private func restartLoops() {
+        guard !stopped, !loops.isEmpty else { return }
+        loops.forEach { $0.cancel() }
+        loops = providers.map { provider in
+            Task { await self.runLoop(for: provider) }
+        }
     }
 
     /// Republish last-known-good metrics under a degraded status; fetchedAt
