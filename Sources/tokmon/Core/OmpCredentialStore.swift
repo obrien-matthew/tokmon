@@ -39,6 +39,27 @@ enum OmpCredentialStore {
         provider: String,
         databaseURL: URL = defaultDatabaseURL
     ) -> OmpOAuthCredential? {
+        rowData(provider: provider, credentialType: "oauth", databaseURL: databaseURL)
+            .flatMap(decodeCredential(json:))
+    }
+
+    /// Bare API keys (omp provider identifier "openrouter"), stored under
+    /// credential_type = 'api_key' with a `{"key": …}` payload. The
+    /// credential_type filter is what keeps the two readers from ever
+    /// returning each other's rows.
+    static func apiKey(
+        provider: String,
+        databaseURL: URL = defaultDatabaseURL
+    ) -> String? {
+        rowData(provider: provider, credentialType: "api_key", databaseURL: databaseURL)
+            .flatMap(decodeAPIKey(json:))
+    }
+
+    private static func rowData(
+        provider: String,
+        credentialType: String,
+        databaseURL: URL
+    ) -> String? {
         var database: OpaquePointer?
         guard sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
               let database
@@ -51,7 +72,7 @@ enum OmpCredentialStore {
 
         let sql = """
         SELECT data FROM auth_credentials
-        WHERE provider = ?1 AND credential_type = 'oauth' AND disabled_cause IS NULL
+        WHERE provider = ?1 AND credential_type = ?2 AND disabled_cause IS NULL
         ORDER BY updated_at DESC LIMIT 1
         """
         var statement: OpaquePointer?
@@ -62,12 +83,13 @@ enum OmpCredentialStore {
 
         let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
         guard sqlite3_bind_text(statement, 1, provider, -1, transient) == SQLITE_OK,
+              sqlite3_bind_text(statement, 2, credentialType, -1, transient) == SQLITE_OK,
               sqlite3_step(statement) == SQLITE_ROW,
               let text = sqlite3_column_text(statement, 0)
         else {
             return nil
         }
-        return decodeCredential(json: String(cString: text))
+        return String(cString: text)
     }
 
     /// The `data` column payload. Only the fields tokmon needs are read;
@@ -90,5 +112,20 @@ enum OmpCredentialStore {
             accountId: row.accountId,
             expiresAt: row.expires.map { Date(timeIntervalSince1970: $0 / 1000) }
         )
+    }
+
+    /// The `api_key` payload shape: `{"key": "sk-…", "source": …}`.
+    private struct APIKeyRowData: Decodable {
+        let key: String?
+    }
+
+    static func decodeAPIKey(json: String) -> String? {
+        guard let data = json.data(using: .utf8),
+              let row = try? JSONDecoder().decode(APIKeyRowData.self, from: data),
+              let key = row.key, !key.isEmpty
+        else {
+            return nil
+        }
+        return key
     }
 }

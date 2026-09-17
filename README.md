@@ -32,6 +32,17 @@ the menu shows full per-provider gauges with reset countdowns.
   transcripts when the live call fails;
   fallback data is as fresh as your last Codex turn and the UI shows its
   actual age. See `docs/guides/codex-data-sources.md`.
+- **OpenRouter** — the calling key's spend cap (`/api/v1/key`) as a
+  gauge, plus the account credit balance (`/api/v1/credits`) as plain
+  text. Disabled by default: it needs an API key, read from oh-my-pi's
+  credential store (`api_key` row for provider `openrouter`) or, for
+  non-omp users, a Keychain item created with
+  `security add-generic-password -s tokmon-openrouter -a openrouter -w`.
+  Only the key's cap is a real meter — the credit figures OpenRouter
+  reports are lifetime cumulative, so there is no honest denominator to
+  draw a bar against and the balance stays a counter. Keys without a
+  spend cap therefore show the balance alone. See
+  `docs/guides/openrouter-data-sources.md`.
 - **Mocks** — two dev providers (disabled by default, toggleable in
   Settings) exercising every metric kind and the degraded/stale paths.
 

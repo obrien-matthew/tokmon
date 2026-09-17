@@ -5,8 +5,12 @@ import Foundation
 // be added here — a provider needing richer display emits more metrics.
 
 enum MetricKind: String, Codable, Sendable {
+    /// A window that refills on a clock (5h session, weekly). Only this
+    /// kind is eligible for the menu bar title.
     case rateLimitWindow
+    /// Money spent against a budget, spend cap, or prepaid balance.
     case spend
+    /// A non-monetary allowance (tokens, requests) with no clock window.
     case quota
 }
 

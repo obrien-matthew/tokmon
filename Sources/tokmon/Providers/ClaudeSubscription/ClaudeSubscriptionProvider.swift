@@ -27,11 +27,20 @@ struct ClaudeSubscriptionProvider: UsageProvider {
     private static let refreshHint = "Open Claude Code or omp to refresh login"
 
     func fetchSnapshot() async throws -> ProviderSnapshot {
+        let keychainJSON = try? await SecurityCLI.findGenericPassword(service: Self.keychainService)
+        let omp = OmpCredentialStore.credential(provider: "anthropic")
         let resolution = Self.resolveTokens(
-            keychainJSON: try? SecurityCLI.findGenericPassword(service: Self.keychainService),
-            omp: OmpCredentialStore.credential(provider: "anthropic"),
+            keychainJSON: keychainJSON,
+            omp: omp,
             now: Date()
         )
+        Diag.claude.log("""
+        resolve keychain=\(keychainJSON?.count ?? -1, privacy: .public) \
+        omp=\(omp != nil, privacy: .public) \
+        ompExpired=\(omp?.isExpired() ?? false, privacy: .public) \
+        candidates=\(resolution.tokens.count, privacy: .public) \
+        anyExpired=\(resolution.anyExpired, privacy: .public)
+        """)
         guard !resolution.tokens.isEmpty else {
             throw ProviderError.authRequired(hint: resolution.anyExpired ? Self.refreshHint : Self.signInHint)
         }
@@ -44,7 +53,7 @@ struct ClaudeSubscriptionProvider: UsageProvider {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
 
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await HTTPSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw URLError(.badServerResponse)
             }

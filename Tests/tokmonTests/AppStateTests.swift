@@ -60,6 +60,39 @@ final class AppStateTests: XCTestCase {
         }
     }
 
+    /// Publishing is async, so a slow attempt can land after the attempt
+    /// that superseded it. The newer result must win regardless of
+    /// arrival order, or the UI silently reverts to stale state.
+    @MainActor
+    func testStaleSequenceCannotOverwriteANewerSnapshot() {
+        let state = AppState(providers: [StubProvider(id: "claude")], cached: [:])
+        let fresh = snapshot(providerID: "claude", session: 20, weekly: 30)
+        var stale = snapshot(providerID: "claude", session: 90, weekly: 95)
+        stale.status = .error(message: "stale")
+
+        state.apply(fresh, sequence: 7)
+        state.apply(stale, sequence: 6)
+
+        XCTAssertEqual(state.snapshots["claude"], fresh)
+        XCTAssertTrue(try XCTUnwrap(state.snapshots["claude"]).status.isOK)
+    }
+
+    @MainActor
+    func testEqualOrNewerSequenceApplies() {
+        let state = AppState(providers: [StubProvider(id: "claude")], cached: [:])
+        let first = snapshot(providerID: "claude", session: 10, weekly: 10)
+        let retry = snapshot(providerID: "claude", session: 40, weekly: 40)
+        let next = snapshot(providerID: "claude", session: 80, weekly: 80)
+
+        state.apply(first, sequence: 3)
+        // Same attempt republishing (degraded then recovered) still lands.
+        state.apply(retry, sequence: 3)
+        XCTAssertEqual(state.snapshots["claude"], retry)
+
+        state.apply(next, sequence: 4)
+        XCTAssertEqual(state.snapshots["claude"], next)
+    }
+
     private func snapshot(providerID: String, session: Double, weekly: Double) -> ProviderSnapshot {
         ProviderSnapshot(
             providerID: providerID,
