@@ -35,6 +35,12 @@ final class AppState: ObservableObject {
         self.headlineMetricOverrides = headlineMetricOverrides
     }
 
+    func apply(_ publication: RefreshPublication) {
+        publication.consume { snapshot, sequence in
+            apply(snapshot, sequence: sequence)
+        }
+    }
+
     /// `sequence` is the engine's per-provider attempt number. Publishing
     /// is async, so a slow attempt can land after the attempt that
     /// superseded it; dropping lower sequences keeps the newest result

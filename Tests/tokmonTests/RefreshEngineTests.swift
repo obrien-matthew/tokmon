@@ -38,7 +38,7 @@ final class RefreshEngineTests: XCTestCase {
             cache: SnapshotCache(directory: directory),
             initial: [:],
             fetchDeadline: fetchDeadline,
-            publish: { snapshot, sequence in await collector.append(snapshot, sequence: sequence) }
+            publish: { publication in await collector.append(publication) }
         )
         self.engine = engine
         return engine
@@ -96,6 +96,40 @@ final class RefreshEngineTests: XCTestCase {
         XCTAssertTrue(published.isEmpty, "a stopped engine must not publish")
     }
 
+    /// A fetch may pass the engine-side lifecycle check and then suspend
+    /// while its publication crosses to another actor. Stop during that
+    /// suspension must close the destination gate before the callback lands.
+    func testStopRejectsPublicationAlreadyAwaitingItsDestination() async throws {
+        let provider = ControllableProvider(id: "fast")
+        await provider.release()
+        let collector = Collector()
+        let release = AsyncGate()
+        let entered = expectation(description: "publication entered sink")
+        let finished = expectation(description: "publication left sink")
+        let engine = RefreshEngine(
+            providers: [provider],
+            cache: SnapshotCache(directory: directory),
+            initial: [:],
+            fetchDeadline: 1,
+            publish: { publication in
+                entered.fulfill()
+                await release.wait()
+                await collector.append(publication)
+                finished.fulfill()
+            }
+        )
+        self.engine = engine
+
+        await engine.refreshAll(force: true)
+        await fulfillment(of: [entered], timeout: 5)
+        await engine.stop()
+        await release.open()
+        await fulfillment(of: [finished], timeout: 5)
+
+        let published = await collector.snapshots
+        XCTAssertTrue(published.isEmpty, "a queued callback must not apply after stop")
+    }
+
     // Supersession is covered where it is actually observable:
     // `AppStateTests.testStaleSequenceCannotOverwriteANewerSnapshot`.
     // An engine-level test cannot reach it — once a fetch times out,
@@ -131,12 +165,14 @@ private actor Collector {
 
     private var waiter: CheckedContinuation<ProviderSnapshot?, Never>?
 
-    func append(_ snapshot: ProviderSnapshot, sequence: Int) {
-        snapshots.append(snapshot)
-        if let waiter {
-            self.waiter = nil
-            consumed += 1
-            waiter.resume(returning: snapshot)
+    func append(_ publication: RefreshPublication) {
+        publication.consume { snapshot, sequence in
+            snapshots.append(snapshot)
+            if let waiter {
+                self.waiter = nil
+                consumed += 1
+                waiter.resume(returning: snapshot)
+            }
         }
     }
 
@@ -165,6 +201,25 @@ private actor Collector {
         guard let waiter else { return }
         self.waiter = nil
         waiter.resume(returning: nil)
+    }
+}
+
+private actor AsyncGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
     }
 }
 

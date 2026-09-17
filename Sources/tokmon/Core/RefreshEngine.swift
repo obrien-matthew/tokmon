@@ -2,15 +2,58 @@ import AppKit
 import Foundation
 import Network
 
+/// A publication can suspend while crossing to its destination actor. Closing
+/// this gate linearizes teardown with the destination mutation: a callback
+/// that arrives after `stop()` is discarded, while one already consuming
+/// finishes before `stop()` returns.
+private final class PublicationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = true
+
+    func close() {
+        lock.lock()
+        isOpen = false
+        lock.unlock()
+    }
+
+    func consume(_ body: () -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard isOpen else { return }
+        body()
+    }
+}
+
+/// The payload is intentionally private. Destinations must call `consume`
+/// from inside their own isolation and perform the destination mutation in
+/// its synchronous body; that rechecks lifecycle state after the actor hop.
+struct RefreshPublication: Sendable {
+    private let snapshot: ProviderSnapshot
+    private let sequence: Int
+    private let gate: PublicationGate
+
+    fileprivate init(snapshot: ProviderSnapshot, sequence: Int, gate: PublicationGate) {
+        self.snapshot = snapshot
+        self.sequence = sequence
+        self.gate = gate
+    }
+
+    func consume(_ body: (ProviderSnapshot, Int) -> Void) {
+        gate.consume {
+            body(snapshot, sequence)
+        }
+    }
+}
+
 /// Runs one polling loop per provider, with exponential backoff on failure,
 /// per-provider in-flight dedup, and immediate refresh on menu open, system
 /// wake, and network restoration.
 actor RefreshEngine {
     private let providers: [any UsageProvider]
     private let cache: SnapshotCache
-    /// Takes the attempt's sequence number so the consumer can drop a
-    /// straggler that lands after a newer attempt already applied.
-    private let publish: @Sendable (ProviderSnapshot, Int) async -> Void
+    /// Destinations unwrap through `RefreshPublication.consume`, which checks
+    /// lifecycle state after the asynchronous actor hop.
+    private let publish: @Sendable (RefreshPublication) async -> Void
 
     /// Last successful snapshot per provider; failures republish these
     /// metrics under a degraded status so the UI never goes blank.
@@ -37,6 +80,7 @@ actor RefreshEngine {
     private var liveTasks: [Key: Task<Void, Never>] = [:]
     /// Terminal: a stopped engine starts no further fetches.
     private var stopped = false
+    private let publicationGate = PublicationGate()
     private var lastAttempt: [String: Date] = [:]
     private var consecutiveFailures: [String: Int] = [:]
     private var loops: [Task<Void, Never>] = []
@@ -62,7 +106,7 @@ actor RefreshEngine {
         cache: SnapshotCache,
         initial: [String: ProviderSnapshot],
         fetchDeadline: TimeInterval = 45,
-        publish: @escaping @Sendable (ProviderSnapshot, Int) async -> Void
+        publish: @escaping @Sendable (RefreshPublication) async -> Void
     ) {
         self.providers = providers
         self.cache = cache
@@ -87,6 +131,7 @@ actor RefreshEngine {
     /// refuses to start new fetches, so a queued wake/network callback
     /// cannot resurrect work after teardown.
     func stop() {
+        publicationGate.close()
         stopped = true
         loops.forEach { $0.cancel() }
         loops.removeAll()
@@ -208,9 +253,9 @@ actor RefreshEngine {
     /// overwrite fresh state with stale status and inflate backoff with
     /// failures nobody is waiting on.
     ///
-    /// A stopped engine is never current: `stop()` cancels in-flight work,
-    /// which surfaces as a fetch failure, and publishing that would hand
-    /// a callback to an owner that has already torn down.
+    /// A stopped engine is never current: cancellation surfaces as a fetch
+    /// failure, which must not mutate last-good state, the cache, or backoff
+    /// after teardown. The publication gate separately guards the sink hop.
     private func isCurrent(_ id: String, _ generation: Int) -> Bool {
         !stopped && self.generation[id] == generation
     }
@@ -232,7 +277,11 @@ actor RefreshEngine {
             consecutiveFailures[id] = 0
             lastGood[id] = snapshot
             cache.update(snapshot)
-            await publish(snapshot, generation)
+            await publish(RefreshPublication(
+                snapshot: snapshot,
+                sequence: generation,
+                gate: publicationGate
+            ))
             Diag.refresh.log("""
             fetch id=\(id, privacy: .public) ok \
             metrics=\(snapshot.metrics.count, privacy: .public) \
@@ -406,7 +455,13 @@ actor RefreshEngine {
             status: status,
             metrics: previous?.metrics ?? []
         )
-        await publish(snapshot, generation)
+        // The destination unwraps only after its actor hop, where the
+        // lifecycle gate is checked.
+        await publish(RefreshPublication(
+            snapshot: snapshot,
+            sequence: generation,
+            gate: publicationGate
+        ))
     }
 
     // MARK: - Wake / network recovery
